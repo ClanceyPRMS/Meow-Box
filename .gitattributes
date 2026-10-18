@@ -1,0 +1,16 @@
+# 仓库里统一存 LF，检出时按平台自动换行 —— 免得 Windows 上每次提交都是整文件改动
+* text=auto
+
+# 二进制：别做换行/文本转换
+*.png binary
+*.ico  binary
+*.zip  binary
+*.exe  binary
+*.webm binary
+*.mp4  binary
+
+# Windows 脚本必须是 CRLF，否则 cscript / WSH 可能报错
+*.vbs text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf

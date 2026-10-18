@@ -1,0 +1,42 @@
+# ── 本机运行时数据（每个人自己生成，绝不入库）──────────────────
+# 上游二进制（Apache / PHP / MySQL / Nginx / Mailpit），几百 MB
+bin/
+# 你自己的网站
+www/
+# MySQL 数据目录 + Mailpit 的 SQLite
+data/
+# 渲染出来的配置（含本机绝对路径）
+etc/
+# 日志
+logs/
+# PID 文件、nginx 临时目录
+run/
+
+# ── 打包与中间产物 ─────────────────────────────────────────
+dist/
+build/
+_internal/
+*.exe
+
+# ── 本机实例配置 ───────────────────────────────────────────
+# 各自跑 `python meowbox.py init` 生成；仓库里只放 example 供参考
+meowbox.config.json
+
+# ── 生成的启动器（里面写着本机 Python 的绝对路径）──────────
+meowbox-tray.vbs
+meowbox-panel.vbs
+
+# ── Python ─────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# ── 编辑器 / 系统杂物 ───────────────────────────────────────
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp

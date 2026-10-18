@@ -1,0 +1,152 @@
+"""把喵盒打包成 exe（PyInstaller 的贴心外壳）。
+
+    python build_exe.py            # 只打包，产物在 dist/MeowBox/
+    python build_exe.py --install  # 打完顺手放进喵盒根目录
+    python build_exe.py --verify   # 打完跑一遍 info/status 自检
+
+为什么用**系统装的** `python` 而不是 venv / 嵌入式解释器：
+Windows 自带的 `ctypes.wintypes` 在精简解释器里可能缺 `HCURSOR`，托盘会当场炸。
+"""
+from __future__ import annotations
+
+import argparse
+import shutil
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+DIST = ROOT / "dist" / "MeowBox"
+EXES = ("meowbox.exe", "meowbox-tray.exe", "meowbox-panel.exe")
+
+
+def human(size: int) -> str:
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024 or unit == "GB":
+            return f"{size:.1f}{unit}"
+        size /= 1024
+    return f"{size:.1f}GB"
+
+
+def ensure_pyinstaller() -> None:
+    try:
+        import PyInstaller  # noqa: F401
+    except ImportError:
+        print("→ 没装 PyInstaller，先装一个……")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "pyinstaller"])
+
+
+def build(clean: bool = True) -> None:
+    cmd = [sys.executable, "-m", "PyInstaller", "--noconfirm"]
+    if clean:
+        cmd.append("--clean")
+    cmd.append(str(ROOT / "meowbox.spec"))
+    print("→ " + " ".join(cmd))
+    started = time.time()
+    subprocess.check_call(cmd, cwd=str(ROOT))
+    print(f"→ 打包完成，用了 {time.time() - started:.0f} 秒")
+
+
+def verify() -> int:
+    """跑一遍真正的命令，看 exe 起的来、根目录认的对不对。"""
+    rc_all = 0
+    for exe in EXES[:1]:                      # 界面版会弹窗，自检只跑命令行版
+        path = DIST / exe
+        if not path.is_file():
+            print(f"❌ 没找到 {path}")
+            rc_all = 1
+            continue
+        print(f"\n=== {exe} info ===")
+        rc = subprocess.call([str(path), "info"], cwd=str(DIST))
+        print(f"=== 退出码 {rc} ===")
+        rc_all |= rc
+        print(f"\n=== {exe} status ===")
+        rc = subprocess.call([str(path), "status"], cwd=str(DIST))
+        print(f"=== 退出码 {rc} ===")
+        rc_all |= rc
+    return rc_all
+
+
+def running_exes() -> list[str]:
+    """哪些喵盒 exe 正在跑（跑着的时候覆盖会 PermissionError，而且会把 _internal 删半截）。"""
+    out = subprocess.run(["tasklist", "/FO", "CSV", "/NH"],
+                         capture_output=True).stdout.decode("gbk", "replace")
+    alive = []
+    for exe in EXES:
+        if exe.lower() in out.lower():
+            alive.append(exe)
+    return alive
+
+
+def install() -> None:
+    """把 exe 和 _internal 放进喵盒根目录（= 真正的便携版安装）。
+
+    两步走，别直接 rmtree 老 _internal —— 中途被锁会留下一个「半截的包」，
+    exe 当场变砖（实测踩过）。所以：先整个复制成 `_internal.new`，成功了再换名。
+    """
+    if not DIST.is_dir():
+        raise SystemExit("还没打包：先跑 build_exe.py")
+
+    busy = running_exes()
+    if busy:
+        print("⚠️  这些还在跑，先从托盘/面板退出（或「停止全部」）：" + "、".join(busy))
+        raise SystemExit(2)
+
+    for exe in EXES:
+        src = DIST / exe
+        if src.is_file():
+            shutil.copy2(src, ROOT / exe)
+            print(f"  ✅ {exe}")
+
+    src_dir = DIST / "_internal"
+    new_dir = ROOT / "_internal.new"
+    old_dir = ROOT / "_internal.old"
+    if new_dir.exists():
+        shutil.rmtree(new_dir, ignore_errors=True)
+    shutil.copytree(src_dir, new_dir)
+    size = sum(p.stat().st_size for p in new_dir.rglob("*") if p.is_file())
+
+    dst = ROOT / "_internal"
+    if dst.exists():
+        if old_dir.exists():
+            shutil.rmtree(old_dir, ignore_errors=True)
+        dst.rename(old_dir)                       # 老包先挪开（还删不掉就留着）
+    new_dir.rename(dst)
+    shutil.rmtree(old_dir, ignore_errors=True)
+    print(f"  ✅ _internal/（{human(size)}）")
+    print("\n  现在双击 meowbox-panel.exe / meowbox-tray.exe 就能用，不用装 Python。")
+    print("  旧的双击启动器（.vbs）跑一次 `meowbox.exe shortcut` 就会改成指向 exe。")
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(description="打包喵盒成 exe")
+    ap.add_argument("--install", action="store_true", help="打包完放进喵盒根目录")
+    ap.add_argument("--verify", action="store_true", help="打包完跑一遍自检")
+    ap.add_argument("--no-clean", action="store_true", help="复用上次的 build/（快，但容易带旧文件）")
+    args = ap.parse_args(argv)
+
+    ensure_pyinstaller()
+    build(clean=not args.no_clean)
+
+    if not DIST.is_dir():
+        print("❌ 没生成 dist/MeowBox，看看上面的报错")
+        return 1
+
+    total = sum(p.stat().st_size for p in DIST.rglob("*") if p.is_file())
+    print(f"\n产物：{DIST}  共 {human(total)}")
+    for exe in EXES:
+        path = DIST / exe
+        print(f"  {'✅' if path.is_file() else '❌'} {exe:<20} "
+              f"{human(path.stat().st_size) if path.is_file() else '—'}")
+
+    rc = 0
+    if args.verify:
+        rc = verify()
+    if args.install:
+        install()
+    return rc
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,32 @@
+{
+  "root": ".",
+  "provider": null,
+  "web": {
+    "server": "apache",
+    "http_port": 80,
+    "https_port": 443,
+    "ssl": false
+  },
+  "php": {
+    "fastcgi_port": 9000
+  },
+  "mailpit": {
+    "enabled": true,
+    "smtp_port": 1025,
+    "http_port": 8025,
+    "max_messages": 500
+  },
+  "mysql": {
+    "enabled": true,
+    "port": 3306
+  },
+  "sites": {
+    "tld": "meow",
+    "www": "www"
+  },
+  "autostart": [
+    "apache",
+    "mysql"
+  ],
+  "openssl": null
+}
