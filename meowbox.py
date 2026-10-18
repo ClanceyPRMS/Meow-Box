@@ -293,9 +293,26 @@ def cmd_tld(args) -> int:
     return 0
 
 
+def _ensure_config(args, root: Path) -> None:
+    """没有配置就先初始化一个。
+
+    双击启动的用户（托盘 / 面板）不该被一句「先运行 meowbox.exe init」顶回去 ——
+    他们连命令行都没开。命令行子命令不调这个，该报错就报错。
+    """
+    if cfgmod.exists(root):
+        return
+    provider = Path(args.provider) if getattr(args, "provider", None) else Path("D:/laragon")
+    args.root = str(root)
+    args.provider = str(provider) if provider.is_dir() else None
+    print("还没有配置，先初始化一个（provider = "
+          f"{args.provider or '无，用自己 bin/'}）")
+    cmd_init(args)
+
+
 def cmd_tray(args) -> int:
     from meow import tray
     root = Path(args.root).resolve()
+    _ensure_config(args, root)
     if args.selftest:
         print("（自检模式：建好托盘图标，3 秒后自动退出）")
         return tray.run_tray(root, timeout=3.0)
@@ -306,13 +323,7 @@ def cmd_gui(args) -> int:
     """打开控制面板。**没有配置也能开**：会先按默认值初始化，别逼用户回命令行。"""
     from meow import gui
     root = Path(args.root).resolve()
-    if not cfgmod.exists(root):
-        provider = Path(args.provider) if getattr(args, "provider", None) else Path("D:/laragon")
-        args.root = str(root)
-        args.provider = str(provider) if provider.is_dir() else None
-        print("还没有配置，先初始化一个（provider = "
-              f"{args.provider or '无，用自己 bin/'}）")
-        cmd_init(args)
+    _ensure_config(args, root)
     return gui.run_panel(root)
 
 
