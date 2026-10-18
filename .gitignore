@@ -26,6 +26,9 @@ meowbox.config.json
 meowbox-tray.vbs
 meowbox-panel.vbs
 
+# ── 本机发布工具（写着仓库目录路径，不进版本库）────────────
+publish.py
+
 # ── Python ─────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
