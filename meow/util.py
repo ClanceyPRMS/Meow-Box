@@ -226,3 +226,20 @@ def free_port(port: int, use_elevation: bool = True):
 def kill_tree(pid: int) -> None:
     """结束一个进程以及它的所有子进程。"""
     run(["taskkill", "/PID", str(pid), "/T", "/F"])
+
+
+def pid_is(pid, names) -> bool:
+    """pid 还活着，**并且**进程名对得上。
+
+    只比 pid 数字是不够的：进程死了以后 Windows 会把这个号码发给别人，
+    于是 `run/mailpit.pid` 里的 2292 可能已经变成 WUDFHost.exe ——
+    再「停」它就会去杀一个系统进程，还报「停不掉，多半是管理员权限」，
+    把人吓得以为权限出了问题。实测踩过（2026-10）。
+    """
+    if not pid:
+        return False
+    rc, out, _ = run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], timeout=20)
+    if str(pid) not in out:
+        return False
+    low = out.lower()
+    return any(str(n).lower() in low for n in names)

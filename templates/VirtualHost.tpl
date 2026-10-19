@@ -6,6 +6,6 @@
         AllowOverride All
         Require all granted
     </Directory>
-    ErrorLog "@logdir@/site-@name@-error.log"
+@PHP_BLOCK@    ErrorLog "@logdir@/site-@name@-error.log"
     CustomLog "@logdir@/site-@name@-access.log" common
 </VirtualHost>

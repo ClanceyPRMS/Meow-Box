@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 
 from . import config as cfgmod
+from . import php as phpmod
 from . import util, vhost
 from .util import ensure_dir, fwd, kill_tree, popen, run
 
@@ -19,9 +20,19 @@ class Apache:
 
     def __init__(self, cfg: dict, bins: dict):
         self.cfg = cfg
+        self.bins = bins
         self.lay = cfgmod.layout(cfg)
         self.dir = Path(bins["apache"]) if bins.get("apache") else None
-        self.php_dir = Path(bins["php"]) if bins.get("php") else None
+
+        # PHP 可能装了好几个版本：mod_php 只能挂「默认版本」，
+        # 其他版本交给 php-cgi（见 meow/php.py 的 CgiPool）
+        self.php_versions = phpmod.scan(cfg)
+        self.php_default = phpmod.default_label(cfg, self.php_versions)
+        self.php_ports = phpmod.port_map(cfg, self.php_versions)
+        default_dir = (self.php_versions[self.php_default].dir
+                       if self.php_default else None)
+        self.php_dir = default_dir or (Path(bins["php"]) if bins.get("php") else None)
+        self._pool: phpmod.CgiPool | None = None
 
     # ---------- 路径 ----------
     @property
@@ -90,6 +101,18 @@ class Apache:
         ssl_conf = lay["etc_apache"] / "httpd-ssl.conf"
         ensure_dir(lay["etc_apache"])
 
+        # 有没有站点要用非默认 PHP 版本？有才加载 mod_proxy_fcgi
+        names = vhost.scan(lay["www"])
+        pool = phpmod.CgiPool(self.cfg, self.php_versions)
+        fcgi_labels = pool.labels_for(names, "apache")
+        if fcgi_labels:
+            proxy_modules = (
+                "LoadModule proxy_module modules/mod_proxy.so\n"
+                "LoadModule proxy_fcgi_module modules/mod_proxy_fcgi.so"
+            )
+        else:
+            proxy_modules = "# 没有站点需要 FastCGI —— 全都走 mod_php"
+
         text = util.render_template(
             tpl,
             SERVERROOT=fwd(self.dir),
@@ -114,6 +137,7 @@ class Apache:
             SITES_DIR=fwd(lay["sites_enabled"]),
             SSL_CONF=fwd(ssl_conf),
             MOD_PHP_CONF=fwd(mod_php),
+            PROXY_MODULES=proxy_modules,
         )
         self.conf.write_text(text, encoding="utf-8", newline="\n")
         mod_php.write_text(self._mod_php_text(), encoding="utf-8", newline="\n")
@@ -128,7 +152,9 @@ class Apache:
         if not self.php_dir or not self.php_dir.is_dir():
             return "# 喵盒：没找到 PHP，本次不挂载 php 模块\n"
         php = self.php_dir
-        lines = ["# 喵盒自动生成 —— 换 PHP 版本只需重跑 render", ""]
+        label = (f"PHP {self.php_versions[self.php_default].version}"
+                 if self.php_default in self.php_versions else "PHP（未知版本）")
+        lines = [f"# 喵盒自动生成 —— mod_php 挂的是默认版本 {label}", ""]
         for lib in ("libcrypto-3-x64.dll", "libssl-3-x64.dll", "libssh2.dll"):
             if (php / lib).is_file():
                 lines.append(f'LoadFile "{fwd(php / lib)}"')
@@ -164,20 +190,33 @@ class Apache:
         ensure_dir(lay["sites_enabled"])
         names = vhost.scan(lay["www"])
 
+        def fcgi_for(name):
+            """这个站点要不要走 php-cgi？要的话返回 (端口, 标签)。"""
+            if not self.php_versions:
+                return None, None
+            label = phpmod.site_label(self.cfg, name, self.php_versions)
+            if not label or label == self.php_default:
+                return None, None
+            return self.php_ports.get(label), label
+
         wanted: dict[str, str] = {}
         for name in names:
             host = vhost.hostname_for(name, tld)
+            port, label = fcgi_for(name)
             wanted[f"auto.{host}.conf"] = vhost.render_apache(
-                lay["www"], name, tld, self.port, lay["logs"], lay["templates"])
+                lay["www"], name, tld, self.port, lay["logs"], lay["templates"],
+                fcgi_port=port, fcgi_label=label, default_label=self.php_default)
 
         if ssl_on:
             for name in names:
                 host = vhost.hostname_for(name, tld)
                 crt, key = lay["ssl_sites"] / f"{host}.crt", lay["ssl_sites"] / f"{host}.key"
                 if crt.is_file() and key.is_file():
+                    port, label = fcgi_for(name)
                     wanted[f"auto.{host}-ssl.conf"] = vhost.render_apache_ssl(
                         lay["www"], name, tld, https_port, lay["logs"], lay["templates"],
-                        crt, key)
+                        crt, key, fcgi_port=port, fcgi_label=label,
+                        default_label=self.php_default)
 
         # 清掉不该存在的（换后缀、关 SSL、删站点之后留下的）
         for old in lay["sites_enabled"].glob("auto.*.conf"):
@@ -218,10 +257,7 @@ class Apache:
             return None
 
     def _alive(self, pid) -> bool:
-        if not pid:
-            return False
-        rc, out, _ = run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], timeout=20)
-        return str(pid) in out
+        return util.pid_is(pid, ("httpd",))
 
     def running(self) -> bool:
         return self._alive(self._pid())
@@ -240,6 +276,7 @@ class Apache:
         rc, out, err = self.test()
         if rc != 0:
             raise RuntimeError("Apache 配置有语法错误，已中止启动：\n" + (out + err).strip())
+        self._start_pool()
         proc = popen([self.exe, "-f", self.conf], cwd=self.dir,
                      log_file=self.lay["logs"] / "apache-console.log")
         self.pidfile.write_text(str(proc.pid), encoding="utf-8")
@@ -247,14 +284,45 @@ class Apache:
             if util.port_in_use(self.port):
                 break
             time.sleep(0.2)
+        else:
+            self._stop_pool()
+            raise RuntimeError(
+                "Apache 起来了但没监听 " + str(self.port) + " 端口，日志末尾：\n"
+                + self._tail_log("apache-console.log"))
         return proc.pid
+
+    # ---------- PHP FastCGI 池 ----------
+    def pool(self) -> phpmod.CgiPool:
+        if self._pool is None:
+            self._pool = phpmod.CgiPool(self.cfg, self.php_versions)
+        return self._pool
+
+    def _start_pool(self) -> None:
+        """非默认版本的站点要 php-cgi 先起来，Apache 才有东西转发。"""
+        names = vhost.scan(self.lay["www"])
+        labels = self.pool().labels_for(names, "apache")
+        if labels:
+            self.pool().start(labels)
+
+    def _stop_pool(self) -> None:
+        if self.php_versions:
+            self.pool().stop_all()
+
+    def _tail_log(self, filename: str, limit: int = 1000) -> str:
+        try:
+            text = (self.lay["logs"] / filename).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return "（没有日志）"
+        return text.strip()[-limit:] or "（日志是空的）"
 
     def stop(self) -> bool:
         pid = self._pid()
         if not pid:
+            self._stop_pool()
             return False
         if not self._alive(pid):
             self.pidfile.unlink(missing_ok=True)
+            self._stop_pool()
             return False
         if self.available:
             # 先温柔地发信号让它自己收尾（别硬砍，MySQL 那边同理）
@@ -278,6 +346,7 @@ class Apache:
                 "关掉那个 Apache，或者用管理员身份重开喵盒/终端。"
             )
         self.pidfile.unlink(missing_ok=True)
+        self._stop_pool()
         return True
 
     def status(self) -> str:

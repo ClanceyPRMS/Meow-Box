@@ -19,6 +19,7 @@ import time
 from pathlib import Path
 
 from . import config as cfgmod
+from . import php as phpmod
 from . import util, vhost
 from .util import ensure_dir, fwd, kill_tree, popen, run
 
@@ -58,9 +59,18 @@ class Nginx:
 
     def __init__(self, cfg: dict, bins: dict):
         self.cfg = cfg
+        self.bins = bins
         self.lay = cfgmod.layout(cfg)
         self.dir = Path(bins["nginx"]) if bins.get("nginx") else None
-        self.php_dir = Path(bins["php"]) if bins.get("php") else None
+
+        # Nginx 没有 mod_php：每个 PHP 版本一个 php-cgi 端口
+        self.php_versions = phpmod.scan(cfg)
+        self.php_default = phpmod.default_label(cfg, self.php_versions)
+        self.php_ports = phpmod.port_map(cfg, self.php_versions)
+        default_dir = (self.php_versions[self.php_default].dir
+                       if self.php_default else None)
+        self.php_dir = default_dir or (Path(bins["php"]) if bins.get("php") else None)
+        self._pool: phpmod.CgiPool | None = None
 
     # ---------- 路径 ----------
     @property
@@ -125,8 +135,17 @@ class Nginx:
 
     @property
     def fcgi_port(self) -> int:
+        """默认版本的端口（默认站点 / 没指定版本的站点用它）。"""
         php = self.cfg.get("php") or {}
+        if self.php_default and self.php_default in self.php_ports:
+            return self.php_ports[self.php_default]
         return int(php.get("fastcgi_port", 9000))
+
+    def port_for(self, name: str) -> int:
+        label = phpmod.site_label(self.cfg, name, self.php_versions)
+        if label and label in self.php_ports:
+            return self.php_ports[label]
+        return self.fcgi_port
 
     @property
     def port(self) -> int:
@@ -178,7 +197,7 @@ class Nginx:
             host = vhost.hostname_for(name, tld)
             wanted[f"auto.{host}.conf"] = vhost.render_nginx(
                 lay["www"], name, tld, self.port, lay["logs"], lay["templates"],
-                fastcgi_port=self.fcgi_port, fastcgi_params=self.fastcgi_params)
+                fastcgi_port=self.port_for(name), fastcgi_params=self.fastcgi_params)
 
         if ssl_on:
             for name in names:
@@ -188,7 +207,7 @@ class Nginx:
                 if crt.is_file() and key.is_file():
                     wanted[f"auto.{host}-ssl.conf"] = vhost.render_nginx_ssl(
                         lay["www"], name, tld, https_port, lay["logs"], lay["templates"],
-                        crt, key, fastcgi_port=self.fcgi_port,
+                        crt, key, fastcgi_port=self.port_for(name),
                         fastcgi_params=self.fastcgi_params)
 
         # 换后缀 / 关 SSL / 删站点之后，旧的 server 块要清干净
@@ -246,10 +265,7 @@ class Nginx:
 
     @staticmethod
     def _alive(pid) -> bool:
-        if not pid:
-            return False
-        rc, out, _ = run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], timeout=20)
-        return str(pid) in out
+        return util.pid_is(pid, ("nginx",))
 
     def running(self) -> bool:
         return self._alive(self._pid())
@@ -280,40 +296,27 @@ class Nginx:
         return f"\n把占着它的程序关掉，或者 python meowbox.py freeport {port}"
 
     # ---------- 启动 ----------
-    def _start_php(self) -> int | None:
-        """起 php-cgi（FastCGI 方式的 PHP）。已经有一份就复用。"""
-        if not self.php_exe or not self.php_exe.is_file():
-            raise RuntimeError(
-                "Nginx 不会自己跑 PHP —— 需要 php-cgi.exe。\n"
-                f"但在 {fwd(self.php_dir) if self.php_dir else '（没有 PHP 目录）'} 里没找到它。\n"
-                "在配置里把 provider 指到带 PHP 的 Laragon，或者 pkg install PHP-8.3。"
-            )
-        port = self.fcgi_port
-        if util.port_in_use(port):
-            holder = util.port_holder(port)
-            if holder and holder[1].lower().startswith("php-cgi"):
-                # 上一轮留下的（pid 文件丢了），认下来就行
-                self.php_pidfile.write_text(str(holder[0]), encoding="utf-8")
-                return holder[0]
-            desc = f"{holder[1]} (pid {holder[0]})" if holder else "未知程序"
-            raise RuntimeError(
-                f"FastCGI 端口 {port} 已被占用：{desc}\n"
-                f"要么把它关掉，要么改 meowbox.config.json 里的 php.fastcgi_port。")
+    def pool(self) -> phpmod.CgiPool:
+        if self._pool is None:
+            self._pool = phpmod.CgiPool(self.cfg, self.php_versions)
+        return self._pool
 
-        cmd = [self.php_exe, "-b", f"127.0.0.1:{port}"]
-        if self.php_ini:
-            cmd += ["-c", fwd(self.php_ini)]
-        proc = popen(cmd, cwd=self.php_dir,
-                     log_file=self.lay["logs"] / "php-cgi-console.log")
-        self.php_pidfile.write_text(str(proc.pid), encoding="utf-8")
-        for _ in range(40):
-            if util.port_in_use(port):
-                util.invalidate_listeners()
-                return proc.pid
-            time.sleep(0.2)
-        tail = self._tail_log("php-cgi-console.log")
-        self._stop_php()
-        raise RuntimeError("php-cgi 没能监听 " + f"{port} 端口。\n" + tail)
+    def _start_php(self) -> dict[str, int]:
+        """把站点用到的每个 PHP 版本都起一个 php-cgi。"""
+        if not self.php_versions:
+            raise RuntimeError(
+                "Nginx 不会自己跑 PHP —— 需要 php-cgi.exe，但一个 PHP 都没装。\n"
+                "先 `python meowbox.py php install 8.3`，或者用 `vendor` 带上 PHP。")
+        names = vhost.scan(self.lay["www"])
+        labels = self.pool().labels_for(names, "nginx")
+        if not labels:
+            return {}
+        missing = [l for l in labels if not self.php_versions[l].cgi.is_file()]
+        if missing:
+            raise RuntimeError(
+                "这些 PHP 版本里没有 php-cgi.exe：" + "、".join(missing) +
+                "\n换一个线程安全（TS）的官方包，或者改用 Apache。")
+        return self.pool().start(labels)
 
     def start(self) -> int:
         if not self.available:
@@ -364,17 +367,11 @@ class Nginx:
 
     # ---------- 停止 ----------
     def _stop_php(self) -> bool:
-        pid = self._php_pid()
-        if not pid:
-            return False
-        if self._alive(pid):
-            kill_tree(pid)
-            for _ in range(10):
-                if not self._alive(pid):
-                    break
-                time.sleep(0.2)
+        """把所有 php-cgi 进程收掉（有几个版本就收几个）。"""
         self.php_pidfile.unlink(missing_ok=True)
-        return True
+        if not self.php_versions:
+            return False
+        return bool(self.pool().stop_all())
 
     def stop(self) -> bool:
         pid = self._pid() or self._master_pid()

@@ -8,6 +8,7 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
+from . import download
 from .util import ensure_dir, fwd, run
 
 DEFAULT_MENU = """# 喵盒软件清单：名字=下载地址
@@ -25,8 +26,9 @@ apache=https://www.apachelounge.com/download/VS18/binaries/httpd-2.4.66-260223-W
 nginx=https://nginx.org/download/nginx-1.29.5.zip
 
 ---
-# PHP（NTS = Non Thread Safe，Apache 的 mod_php 和 php-cgi 都用这个）
-php=https://windows.php.net/downloads/releases/archives/php-8.4.12-nts-Win32-vs17-x64.zip
+# PHP（要 **线程安全(TS)** 的包：mod_php 只能挂 TS，php-cgi 用 TS 也没问题。
+# 想装别的版本用： python meowbox.py php install 8.5
+php=https://windows.php.net/downloads/releases/php-8.4.26-Win32-vs17-x64.zip
 
 ---
 # 数据库
@@ -80,19 +82,16 @@ def install(cfg: dict, name: str) -> tuple[bool, str]:
     filename = url.split("/")[-1].split("?")[0] or "download.bin"
     target = cache / filename
 
-    if not target.is_file():
-        rc, out, err = run(["curl", "-L", "--fail", "-o", fwd(target), url], timeout=600)
-        if rc != 0:
-            return False, f"下载失败：{err.strip() or out.strip()}"
+    # 下载/解压都走标准库（见 meow/download.py）—— 冻结成 exe 以后
+    # PATH 里没有 unzip，用子进程调外部命令会当场哑掉。
+    try:
+        download.fetch(url, target)
+    except Exception as exc:                        # noqa: BLE001
+        return False, f"下载失败：{exc}"
 
     dest = ensure_dir(root / "bin" / name)
-    lower = filename.lower()
-    if lower.endswith(".zip"):
-        rc, out, err = run(["unzip", "-o", fwd(target), "-d", fwd(dest)], timeout=300)
-    elif lower.endswith((".tar.gz", ".tgz", ".tar.xz", ".txz", ".tar")):
-        rc, out, err = run(["tar", "-xf", fwd(target), "-C", fwd(dest)], timeout=300)
-    else:
-        return False, f"不认识这种压缩包：{filename}（先手动解压到 bin/{name} 吧）"
-    if rc != 0:
-        return False, f"解压失败：{err.strip() or out.strip()}"
+    try:
+        download.extract(target, dest)
+    except Exception as exc:                        # noqa: BLE001
+        return False, f"解压失败：{exc}"
     return True, f"已装到 {dest}"

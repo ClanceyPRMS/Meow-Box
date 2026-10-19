@@ -11,7 +11,7 @@
         AllowOverride All
         Require all granted
     </Directory>
-
+@PHP_BLOCK@
     ErrorLog "@logdir@/site-@name@-ssl-error.log"
     CustomLog "@logdir@/site-@name@-ssl-access.log" common
 </VirtualHost>

@@ -112,16 +112,34 @@ def _web(services: dict):
     return svc
 
 
+def _php_summary(cfg: dict) -> str:
+    """「PHP 8.3（默认）+ 8.5」这样的一行。"""
+    from meow import php as phpmod
+    versions = phpmod.scan(cfg)
+    if not versions:
+        return "没装 PHP"
+    default = phpmod.default_label(cfg, versions)
+    others = [l for l in versions if l != default]
+    text = f"PHP {default}（默认）"
+    if others:
+        text += " + " + "、".join(others)
+    return text
+
+
 def _server_line(cfg: dict, bins: dict) -> str:
     """「nginx（已就绪，PHP 走 FastCGI 127.0.0.1:9000）」这样的一行人话。"""
     name = svcmod.server_name(cfg)
     found = bins.get(name)
     if not found:
         return f"{svcmod.pretty(name)} —— 没找到程序目录"
+    from meow import php as phpmod
+    versions = phpmod.scan(cfg)
+    ports = phpmod.port_map(cfg, versions)
     if name == "nginx":
-        port = (cfg.get("php") or {}).get("fastcgi_port", 9000)
-        return f"{svcmod.pretty(name)}（PHP 走 FastCGI 127.0.0.1:{port}）"
-    return f"{svcmod.pretty(name)}（PHP 以模块方式挂载）"
+        pairs = "、".join(f"{l}→{p}" for l, p in ports.items()) or "没装 PHP"
+        return f"{svcmod.pretty(name)}（PHP 走 FastCGI：{pairs}）"
+    default = phpmod.default_label(cfg, versions)
+    return f"{svcmod.pretty(name)}（PHP {default or '—'} 以模块方式挂载）"
 
 
 # --------------------------------------------------------------------------
@@ -168,6 +186,7 @@ def cmd_info(args) -> int:
     _row("Web 服务器", _server_line(cfg, bins))
     _row("站点后缀", "." + cfg["sites"]["tld"])
     _row("HTTP/HTTPS", f"{cfg['web']['http_port']} / {cfg['web']['https_port']}  ssl={cfg['web']['ssl']}")
+    _row("PHP", _php_summary(cfg))
     _row("MySQL 端口", str(cfg["mysql"]["port"]))
     mail = cfg.get("mailpit") or {}
     if mail.get("enabled", True):
@@ -188,8 +207,12 @@ def _site_names(cfg) -> list[str]:
 
 def cmd_list(args) -> int:
     cfg, _ = _load(Path(args.root))
+    from meow import php as phpmod
+
+    lay = cfgmod.layout(cfg)
     names = _site_names(cfg)
     tld = cfg["sites"]["tld"]
+    versions = phpmod.scan(cfg)
     current = set(hostsmod.current_hostnames(
         hostsmod.read(getattr(args, "hosts_file", None) or hostsmod.default_path())
     ))
@@ -199,8 +222,10 @@ def cmd_list(args) -> int:
         return 0
     for name in names:
         host = vhost.hostname_for(name, tld)
+        url = vhost.site_url(cfg, lay, name)
+        label = phpmod.site_label(cfg, name, versions) or "—"
         flag = "✅ hosts 已登记" if host in current else "⚠️  hosts 里还没有"
-        print(f"  {name:<20} http://{host}   {flag}")
+        print(f"  {name:<20} {url:<28} PHP {label:<6} {flag}")
     return 0
 
 
@@ -232,6 +257,9 @@ def cmd_site(args) -> int:
         print(f"没有这个站点：{fwd(target)}")
         return 1
     shutil.rmtree(target)
+    from meow import php as phpmod
+    if phpmod.prunes(cfg, _site_names(cfg)):
+        cfgmod.save(cfg)
     print(f"已删除 {fwd(target)}")
     return 0
 
@@ -427,7 +455,10 @@ def cmd_render(args) -> int:
     _row("主配置", fwd(conf))
     if server.name == "nginx":
         _row("站点片段", fwd(lay["nginx_sites"]))
-        _row("PHP", f"php-cgi FastCGI 127.0.0.1:{server.fcgi_port}")
+        from meow import php as phpmod
+        ports = phpmod.port_map(cfg, phpmod.scan(cfg))
+        pairs = "、".join(f"{l}→127.0.0.1:{p}" for l, p in ports.items()) or "没装 PHP"
+        _row("PHP", f"php-cgi FastCGI {pairs}")
     else:
         _row("PHP 挂载", fwd(lay["etc_apache"] / "mod_php.conf"))
         _row("站点片段", fwd(lay["sites_enabled"]))
@@ -495,8 +526,7 @@ def cmd_web(args) -> int:
     print(f"\n  ✅ 以后 start / stop / status 都是在管 {svcmod.pretty(target)} 了")
     print(f"     启动： python meowbox.py start {target}")
     if target == "nginx":
-        port = (cfg.get("php") or {}).get("fastcgi_port", 9000)
-        print(f"     PHP：  会自动带起 php-cgi（FastCGI 127.0.0.1:{port}）")
+        print("     PHP：  每个版本各起一个 php-cgi，端口见 `python meowbox.py php list`")
     return 0
 
 
@@ -594,9 +624,15 @@ def cmd_restart(args) -> int:
     cfg, bins = _load(Path(args.root))
     services = svcmod.build(cfg, bins)
     _title("重启服务")
-    _print_service_results(svcmod.stop(services, args.names))
+    names = args.names
+    if not names:
+        # 只把「重启前在跑的」起回来。以前这里是按 autostart 起的，
+        # 结果 mailpit 这种不在 autostart 里的服务被顺手关掉就再也不起来。
+        names = [n for n, svc in services.items() if svc.status() == "运行中"] \
+            or list(cfg.get("autostart") or [])
+    _print_service_results(svcmod.stop(services, names))
     time.sleep(0.6)
-    _print_service_results(svcmod.start(services, args.names or cfg.get("autostart")))
+    _print_service_results(svcmod.start(services, names))
     return 0
 
 
@@ -973,6 +1009,18 @@ def cmd_status(args) -> int:
         labels[mail.http_port] = f"端口 {mail.http_port}（收件箱）"
     for port, label in labels.items():
         _row(label, util.who_holds_port(port) or "空闲")
+
+    # 非默认 PHP 版本靠 php-cgi 跑，它的状态也得看得见
+    from meow import php as phpmod
+    versions = phpmod.scan(cfg)
+    if versions:
+        pool = phpmod.CgiPool(cfg, versions)
+        running = [l for l in versions if pool.running(l)]
+        if running:
+            detail = "、".join(f"{l}(:{pool.port(l)})" for l in running)
+            print(f"  🟢 {'php-cgi':<8} 运行中   {detail}")
+        else:
+            print(f"  ⚪ {'php-cgi':<8} 已停止")
     return 0
 
 
@@ -1015,6 +1063,141 @@ def cmd_pkg(args) -> int:
         ok, msg = pkgmod.install(cfg, args.name)
         print(("  ✅ " if ok else "  ❌ ") + msg)
         return 0 if ok else 1
+    return 1
+
+
+def _php_apply(cfg, bins, restart: bool = True) -> str:
+    """PHP 版本改动之后：存配置 → 重渲染 → （需要的话）重启 Web 服务器。"""
+    cfgmod.save(cfg)
+    services = svcmod.build(cfg, bins)
+    server = _web(services)
+    if not server.available:
+        return "（没找到 Web 服务器，只改了配置）"
+    server.render()
+    if not restart or not server.running():
+        return "（配置已重新生成，下次启动生效）"
+    server.stop()
+    server.start()
+    return "（配置已重新生成，Web 服务器已重启）"
+
+
+def cmd_php(args) -> int:
+    """PHP 多版本：看、装、切默认、给单个站点指定、打开 ini。"""
+    from meow import php as phpmod
+
+    cfg, bins = _load(Path(args.root))
+    action = args.action or "list"
+    versions = phpmod.scan(cfg)
+    default = phpmod.default_label(cfg, versions)
+    ports = phpmod.port_map(cfg, versions)
+
+    if action == "list":
+        _title(f"PHP 版本（{len(versions)} 个）")
+        if not versions:
+            print("  一个都没有。装一个： python meowbox.py php install 8.3")
+            return 0
+        names = _site_names(cfg)
+        for label, ver in versions.items():
+            tags = []
+            if label == default:
+                tags.append("默认")
+            tags.append("TS" if ver.thread_safe else "NTS(不能挂 mod_php)")
+            if defaults := [n for n in names if phpmod.site_label(cfg, n, versions) == label]:
+                tags.append("站点：" + "、".join(defaults))
+            print(f"  {label:<6} {ver.version:<10} :{ports.get(label, '-'):<6} "
+                  f"{' · '.join(tags)}")
+            print(f"         {fwd(ver.dir)}")
+        print("\n  给站点换版本： python meowbox.py php site <站点> <版本>")
+        print("  换默认版本：   python meowbox.py php use <版本>")
+        return 0
+
+    if action == "install":
+        want = (args.name or "").strip()
+        _title(f"安装 PHP {want or '（最新版）'}")
+        had_any = bool(versions)
+        try:
+            ver = phpmod.install(cfg, want)
+        except Exception as exc:                          # noqa: BLE001
+            print(f"  ❌ {exc}")
+            return 1
+        if not had_any and not (cfg.get("php") or {}).get("version"):
+            cfg["php"]["version"] = ver.label
+            cfgmod.save(cfg)
+            print(f"  这是第一个 PHP，已设为默认版本（{ver.label}）")
+        print("  " + _php_apply(cfg, bins))
+        return 0
+
+    if action == "use":
+        if not args.name:
+            _row("默认版本", default or "（没有装 PHP）")
+            return 0
+        label = args.name.strip()
+        if label not in versions:
+            print(f"没有装 {label}。现有：{', '.join(versions) or '（空）'}")
+            return 1
+        cfg["php"]["version"] = label
+        print(f"  默认 PHP 版本 → {versions[label].version}")
+        print("  " + _php_apply(cfg, bins))
+        return 0
+
+    if action == "site":
+        if not args.name:
+            _title("站点 → PHP 版本")
+            for name in _site_names(cfg):
+                label = phpmod.site_label(cfg, name, versions)
+                mark = "" if cfg["sites"].get("php", {}).get(name) else "（跟默认）"
+                print(f"  {name:<20} {label or '—'} {mark}")
+            return 0
+        site = args.name.strip()
+        if site not in _site_names(cfg):
+            print(f"没有这个站点：{site}")
+            return 1
+        label = (args.version or "").strip()
+        if not label:
+            cur = phpmod.site_label(cfg, site, versions)
+            own = cfg["sites"].get("php", {}).get(site)
+            _row(site, f"{cur}（{'单独指定' if own else '跟默认'}）")
+            return 0
+        if label not in ("default", "默认") and label not in versions:
+            print(f"没有装 {label}。现有：{', '.join(versions) or '（空）'}")
+            return 1
+        phpmod.set_site_version(cfg, site, None if label in ("default", "默认") else label)
+        print(f"  {site} → {phpmod.site_label(cfg, site, versions)}")
+        print("  " + _php_apply(cfg, bins))
+        return 0
+
+    if action in ("open", "ini"):
+        label = (args.name or default or "").strip()
+        if label not in versions:
+            print(f"没有装 {label or '（任何版本）'}。现有：{', '.join(versions) or '（空）'}")
+            return 1
+        ver = versions[label]
+        target = ver.ini if action == "ini" else ver.dir
+        if action == "ini" and not ver.ini.is_file():
+            print(f"{label} 还没有 php.ini：{fwd(ver.ini)}")
+            return 1
+        util.open_path(target)
+        print(f"  已打开 {fwd(target)}")
+        return 0
+
+    if action == "myadmin":
+        lay = cfgmod.layout(cfg)
+        if not phpmod.phpmyadmin_ready(cfg):
+            _title("安装 phpMyAdmin")
+            try:
+                phpmod.install_phpmyadmin(cfg)
+            except Exception as exc:                      # noqa: BLE001
+                print(f"  ❌ {exc}")
+                return 1
+            server = _web(svcmod.build(cfg, bins))
+            if server.available:
+                server.render()
+            print("  还要同步一下 hosts： python meowbox.py hosts --apply")
+        url = vhost.site_url(cfg, lay, "phpmyadmin")
+        _row("地址", url)
+        util.open_path(url)
+        return 0
+
     return 1
 
 
@@ -1155,6 +1338,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("action", choices=["list", "install"])
     p.add_argument("name", nargs="?")
     p.set_defaults(func=cmd_pkg)
+
+    p = sub.add_parser("php", help="PHP 多版本：查看 / 安装 / 切换 / 打开 phpMyAdmin")
+    p.add_argument("action", nargs="?", default="list",
+                   choices=["list", "install", "use", "site", "open", "ini", "myadmin"])
+    p.add_argument("name", nargs="?", help="版本号（8.5）、站点名，或 install 的目标版本")
+    p.add_argument("version", nargs="?", help="php site <站点> <版本> 里的版本")
+    p.set_defaults(func=cmd_php)
 
     return parser
 

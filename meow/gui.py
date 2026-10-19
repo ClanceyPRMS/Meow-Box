@@ -24,6 +24,7 @@ from . import hosts as hostsmod
 from . import launcher as launchmod
 from . import migrate as migratemod
 from . import packages as pkgmod
+from . import php as phpmod
 from . import portable as portablemod
 from . import runtime
 from . import services as svcmod
@@ -214,6 +215,11 @@ class Panel:
         m_site.add_command(label="修改域名后缀…", command=self.ask_tld)
         menubar.add_cascade(label="站点", menu=m_site)
 
+        m_php = tk.Menu(menubar, tearoff=0)
+        self.m_php = m_php
+        m_php.configure(postcommand=self._fill_php_menu)
+        menubar.add_cascade(label="PHP", menu=m_php)
+
         m_tool = tk.Menu(menubar, tearoff=0)
         m_ssl = tk.Menu(m_tool, tearoff=0)
         m_ssl.add_command(label="HTTPS 体检（为什么没小绿锁）", command=self.ssl_doctor)
@@ -279,12 +285,19 @@ class Panel:
 
         threading.Thread(target=worker, daemon=True).start()
 
+    def _bg_log(self, text: str) -> None:
+        """后台线程里打日志用这个 —— Tk 控件不能从别的线程碰。"""
+        self.queue.put(("", "log", str(text)))
+
     def _drain(self) -> None:
         while True:
             try:
                 label, kind, message = self.queue.get_nowait()
             except queue.Empty:
                 break
+            if kind == "log":                       # 后台的进度输出，直接转进日志框
+                self.log(message)
+                continue
             mark = "[OK]" if kind == "ok" else "[!!]"
             if kind == "ssl-report":
                 problems = sum(1 for level, _i, _n in message["checks"] if level == "warn")
@@ -384,10 +397,16 @@ class Panel:
             text="  ".join(n for n, p in self.bins.items() if p) or "没有探测到组件")
         self.listbox.delete(0, "end")
         self.sites: list[tuple[str, str]] = []
+        versions = phpmod.scan(self.cfg)
+        default = phpmod.default_label(self.cfg, versions)
         for name in vhost.scan(self.lay["www"]):
             host = vhost.hostname_for(name, tld)
+            url = vhost.site_url(self.cfg, self.lay, name)
+            label = phpmod.site_label(self.cfg, name, versions) or "—"
+            # 不是默认版本就标出来 —— 一眼能看出哪个站在用老 PHP
+            php_text = f"PHP {label}" + ("" if label == default else " *")
             self.sites.append((name, host))
-            self.listbox.insert("end", f"  {name:<20} http://{host}")
+            self.listbox.insert("end", f"  {name:<18} {url:<27} {php_text}")
         self._refresh_status()
         self._refresh_ssl()
         try:
@@ -416,10 +435,12 @@ class Panel:
 
     def restart(self) -> None:
         def job():
+            # 只重启「刚才在跑的」，别顺手把 mailpit 这种不在 autostart 里的关掉
+            names = [n for n, svc in self.services.items() if svc.status() == "运行中"] or ["all"]
             svcmod.stop(self.services, ["all"])
             import time
             time.sleep(0.5)
-            rows = svcmod.start(self.services, ["all"])
+            rows = svcmod.start(self.services, names)
             bad = [f"{svcmod.pretty(n)}: {e}" for n, s, e in rows if s == "失败"]
             if bad:
                 raise RuntimeError("\n".join(bad))
@@ -517,6 +538,8 @@ class Panel:
 
         def job():
             shutil.rmtree(self.lay["www"] / name)
+            if phpmod.prunes(self.cfg, vhost.scan(self.lay["www"])):
+                cfgmod.save(self.cfg)
             server = svcmod.web(self.services)
             if server is not None and server.available:
                 server.render()
@@ -1057,7 +1080,142 @@ class Panel:
             return
         index = selection[0]
         if 0 <= index < len(self.sites):
-            util.open_path(f"http://{self.sites[index][1]}")
+            util.open_path(vhost.site_url(self.cfg, self.lay, self.sites[index][0]))
+
+    # ------------------------------------------------------------ PHP
+    def _fill_php_menu(self) -> None:
+        """每次拉开菜单都重新扫一遍（可能刚装完新版本）。"""
+        menu = self.m_php
+        menu.delete(0, "end")
+        versions = phpmod.scan(self.cfg)
+        default = phpmod.default_label(self.cfg, versions)
+        ports = phpmod.port_map(self.cfg, versions)
+        if versions:
+            menu.add_command(label=f"默认版本：{default}（点下面的换）", state="disabled")
+            for label, ver in versions.items():
+                tick = "●" if label == default else "○"
+                menu.add_command(
+                    label=f"{tick} {ver.version}　FastCGI :{ports.get(label, '-')}",
+                    command=lambda l=label: self.php_use(l))
+            menu.add_separator()
+        else:
+            menu.add_command(label="还没有装 PHP", state="disabled")
+            menu.add_separator()
+        menu.add_command(label="安装 PHP 版本…（从 php.net 下载）", command=self.php_install)
+        menu.add_command(label="给选中的站点换 PHP 版本…", command=self.php_set_site)
+        menu.add_separator()
+        menu.add_command(label="打开 php.ini", command=self.php_open_ini)
+        menu.add_command(label="打开 PHP 目录", command=self.php_open_dir)
+        menu.add_separator()
+        menu.add_command(label="打开 phpMyAdmin（没装会先装）", command=self.php_myadmin)
+
+    def _php_apply(self, message: str) -> None:
+        """PHP 版本变了：存配置 → 重渲染 → 正在跑就重启。"""
+        cfgmod.save(self.cfg)
+
+        def job():
+            server = svcmod.web(self.services)
+            if server is None or not server.available:
+                return message + "（没找到 Web 服务器，只改了配置）"
+            was_running = server.running()
+            server.render()
+            if was_running:
+                server.stop()
+                server.start()
+                return message + "（Web 服务器已重启）"
+            return message + "（下次启动生效）"
+        self._run("切换 PHP 版本", job)
+
+    def php_use(self, label: str) -> None:
+        versions = phpmod.scan(self.cfg)
+        if label not in versions:
+            messagebox.showwarning("喵盒", f"没有装 PHP {label}")
+            return
+        self.cfg["php"]["version"] = label
+        self._php_apply(f"默认 PHP 版本 → {versions[label].version}（{label}）")
+
+    def php_install(self) -> None:
+        want = simpledialog.askstring(
+            "安装 PHP", "要装哪个版本？\n\n填 8.3 / 8.4 / 8.5 这样的大版本就行（会装该系列最新补丁），留空装最新版：",
+            initialvalue="", parent=self.tk)
+        if want is None:
+            return
+        want = want.strip()
+        if not messagebox.askyesno(
+                "喵盒", f"从 windows.php.net 下载 PHP {want or '（最新版）'} 的 x64 线程安全包？\n\n"
+                        "大约 30~40 MB，装进 bin/php/，不会动已经装好的其他版本。"):
+            return
+
+        def job():
+            ver = phpmod.install(self.cfg, want, say=self._bg_log)
+            return f"已安装 PHP {ver.version}（{ver.label}）"
+
+        self._run("安装 PHP", job)
+
+    def php_set_site(self) -> None:
+        selection = self.listbox.curselection()
+        if not selection or not getattr(self, "sites", None):
+            messagebox.showinfo("喵盒", "先在站点列表里点一个站点")
+            return
+        name, _host = self.sites[selection[0]]
+        versions = phpmod.scan(self.cfg)
+        if not versions:
+            messagebox.showinfo("喵盒", "还没有装 PHP")
+            return
+        current = phpmod.site_label(self.cfg, name, versions)
+        options = "、".join(versions)
+        answer = simpledialog.askstring(
+            "站点 PHP 版本",
+            f"{name} 现在用的是 {current}\n\n可选：{options}\n"
+            "输入 default 表示跟随默认版本：",
+            initialvalue=current or "", parent=self.tk)
+        if answer is None:
+            return
+        answer = answer.strip()
+        if answer not in ("default", "默认") and answer not in versions:
+            messagebox.showwarning("喵盒", f"没有装 PHP {answer}")
+            return
+        phpmod.set_site_version(self.cfg, name, None if answer in ("default", "默认") else answer)
+        target = phpmod.site_label(self.cfg, name, versions)
+        self._php_apply(f"{name} → PHP {target}")
+
+    def php_open_ini(self) -> None:
+        versions = phpmod.scan(self.cfg)
+        label = phpmod.default_label(self.cfg, versions)
+        if not label:
+            messagebox.showinfo("喵盒", "还没有装 PHP")
+            return
+        ini = versions[label].ini
+        if not ini.is_file():
+            messagebox.showwarning("喵盒", f"PHP {label} 没有 php.ini：\n{ini}")
+            return
+        util.open_path(ini)
+
+    def php_open_dir(self) -> None:
+        versions = phpmod.scan(self.cfg)
+        label = phpmod.default_label(self.cfg, versions)
+        util.open_path(versions[label].dir if label else (self.lay["root"] / "bin" / "php"))
+
+    def php_myadmin(self) -> None:
+        lay = self.lay
+        if not phpmod.phpmyadmin_ready(self.cfg):
+            if not messagebox.askyesno(
+                    "喵盒", "还没装 phpMyAdmin。\n\n从官方源下载一份放到 www/phpmyadmin？\n"
+                            "（免登录、只监听本机，本地开发用）"):
+                return
+
+            def job():
+                target = phpmod.install_phpmyadmin(self.cfg, say=self._bg_log)
+                server = svcmod.web(self.services)
+                if server is not None and server.available:
+                    server.render()
+                return f"phpMyAdmin 已装好：{target}（记得同步 hosts）"
+
+            self._run("安装 phpMyAdmin", job)
+            return
+        url = vhost.site_url(self.cfg, lay, "phpmyadmin")
+        util.open_path(url)
+        self.log(f"[OK] 打开 {url}")
 
     def run(self) -> int:
         self.log(f"喵盒已就绪 —— {self.lay['root']}")

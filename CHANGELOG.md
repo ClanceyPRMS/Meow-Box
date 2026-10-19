@@ -9,8 +9,58 @@
 
 ### 计划中
 
-- PHP 多版本切换（现在只能用一个 PHP）
 - 站点级 rewrite 配置（现在要在 `auto.*.conf` 里手加，重新渲染就没了）
+
+## [0.2.0] - 2026-10-19
+
+「PHP 版本自由」版。原来整个喵盒只有一个 PHP，现在一个站点一个版本。
+
+### 新增
+
+#### PHP 多版本（`meow/php.py`）
+
+- `bin/php/` 下面放几个版本就是几个版本，启动时自动扫描（带缓存，面板刷新不再狂起子进程）
+- **站点级切换**：`sites.php` 里 `{"blog": "8.5"}`，没写就跟着默认版本
+- Apache：默认版本继续走 mod_php，其他版本各自一个 `php-cgi.exe` + `SetHandler proxy:fcgi://…`
+- Nginx：本来就走 php-cgi，现在**一个版本一个端口**（默认版本拿 9000，其余 9001、9002…）
+- php-cgi 进程池按需启动：没有站点用 8.5，就不会多一个进程
+- `php list / install <版本> / use <版本> / site <站点> [版本] / ini / open / myadmin`
+- `php install` 从 **windows.php.net** 拿官方 x64 **线程安全（TS）** 包（mod_php 只能挂 TS），
+  自动挑该系列最新补丁，解压进 `bin/php/`，并生成 php.ini：
+  `extension_dir`、session 目录、`sendmail_path`（接到 Mailpit）、20 个常用扩展
+- 面板新增 **PHP 菜单**：默认版本打 ●，点一下就换；还能装新版本、给选中站点换版本、
+  打开 php.ini / PHP 目录、打开 phpMyAdmin
+
+#### phpMyAdmin
+
+- `php myadmin` 第一次会从官方源下载最新版装到 `www/phpmyadmin`，
+  于是它就是一个普通站点（`https://phpmyadmin.meow`），配好 root 免密、只监听本机
+
+#### 站点默认打开 https
+
+- 站点列表、双击打开、托盘菜单统一走 `vhost.site_url()`：**签过证书就用 https**，
+  没签过（或 SSL 关着）才退回 http —— 三处各写一套的时代结束了
+
+#### 下载不再依赖系统工具（`meow/download.py`）
+
+- `pkg install` 和 `php install` 改用标准库 `urllib` + `zipfile` / `tarfile`：
+  exe 发出去以后 PATH 里没有 `unzip`，以前会当场哑掉；SSL 出错时自动退回系统 `curl`
+
+### 修复
+
+- **面板里站点一直显示 `http://`**：即使证书早就签好了，双击还是打开 http。现在按证书实际情况显示
+- **pid 文件里的号可能已经被系统发给别人**：Mailpit 崩了以后 `run/mailpit.pid` 里的
+  2292 变成 `WUDFHost.exe`，喵盒以为它还活着，去 taskkill 一个系统进程，失败后还报
+  「多半是管理员权限」。新增 `util.pid_is(pid, names)`：**pid 在、进程名也对**才算活着
+  （Apache / Nginx / MySQL / Mailpit / php-cgi 全部换过来）
+- `packages.conf` 里 PHP 那行原来写的是 **NTS** 包 —— mod_php 根本挂不上，改成 TS
+- 删站点时顺手把 `sites.php` 里那个站点的版本记录一起清掉（不然会留垃圾键）
+- `discover()` 探测到的 PHP 路径现在跟「默认版本」一致（以前按目录名倒序瞎挑一个）
+- 顺带把 `vhost.py` 里三个 `FALLBACK_*` 模板的占位符从 `{}` 改成 `@名字@`
+  （以前模板文件丢了会渲染出一堆字面量 `{port}`）
+- **`restart` 会把 Mailpit 顺手关掉再不拉起来**：以前重启后按 `autostart`
+  列表启动，而 Mailpit 不在里面 → 重启一次信箱就没了。现在只重启「重启前
+  在跑的」那些服务（命令行和面板的「重启」都改了）
 
 ## [0.1.0] - 2026-10-19
 
@@ -120,5 +170,6 @@
 - **站点级 rewrite 要手改**：写进 `auto.*.conf`，重新渲染就没了
 - **喵盒和 Laragon 不能同时跑**：抢 80 / 3306 端口
 
-[未发布]: https://github.com/ClanceyPRMS/Meow-Box/compare/v0.1.0...HEAD
+[未发布]: https://github.com/ClanceyPRMS/Meow-Box/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/ClanceyPRMS/Meow-Box/releases/tag/v0.2.0
 [0.1.0]: https://github.com/ClanceyPRMS/Meow-Box/releases/tag/v0.1.0

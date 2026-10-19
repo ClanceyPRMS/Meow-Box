@@ -105,10 +105,7 @@ class Mailpit:
 
     @staticmethod
     def _alive(pid) -> bool:
-        if not pid:
-            return False
-        rc, out, _ = run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], timeout=20)
-        return str(pid) in out
+        return util.pid_is(pid, ("mailpit",))
 
     def running(self) -> bool:
         return self._alive(self._pid())

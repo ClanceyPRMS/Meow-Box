@@ -37,6 +37,7 @@ LoadModule headers_module modules/mod_headers.so
 LoadModule setenvif_module modules/mod_setenvif.so
 LoadModule version_module modules/mod_version.so
 @SSL_MODULES@
+@PROXY_MODULES@
 
 # ---------- 主站 ----------
 <Directory />

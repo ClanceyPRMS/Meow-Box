@@ -156,15 +156,55 @@ python meowbox.py start          # 之后 start/stop/status 管的都是它
 唯一要注意的是 **`.htaccess` 只有 Apache 认** —— 用 Nginx 时把重写规则写成
 `try_files` / `location`（喵盒的模板里已经带了 `try_files`）。
 
-**Nginx 的 PHP 是怎么跑的**：Nginx 自己不解释 PHP，喵盒会另外拉起一个
-
-```
-php-cgi.exe -b 127.0.0.1:9000        # FastCGI
-```
-
+**Nginx 的 PHP 是怎么跑的**：Nginx 自己不解释 PHP，喵盒会另外拉起 `php-cgi.exe -b 127.0.0.1:9000`（FastCGI）。
 `start nginx` 会把这一对一起起来，`stop` 一起收掉；端口嫌挤就在配置里改
 `php.fastcgi_port`。改完配置不用重启：`render` 会自动 `nginx -s reload` 热加载，
 连接都不带断的。
+
+装了多个 PHP 版本时，**每个版本各起一个 php-cgi**（端口见 `php list`），
+站点用它自己指定那个版本 —— 详见下一节。
+
+## PHP：多版本 + 站点级切换
+
+`bin/php/` 下面放几个版本就是几个版本，喵盒自己扫，不用登记：
+
+```bash
+python meowbox.py php list               # 装了哪些、默认是哪个、各占哪个端口
+python meowbox.py php install 8.5        # 从 php.net 下 Windows x64 线程安全包
+python meowbox.py php use 8.5            # 换默认版本（没单独指定的站点都跟着它）
+python meowbox.py php site blog 8.5      # 只让 blog 用 8.5
+python meowbox.py php site blog default  # 让它跟回默认版本
+python meowbox.py php ini                # 打开默认版本的 php.ini
+python meowbox.py php myadmin            # 装 / 打开 phpMyAdmin
+```
+
+配置里就两行：
+
+```json
+"php":   { "fastcgi_port": 9000, "version": "8.3" },
+"sites": { "php": { "blog": "8.5" } }
+```
+
+**两个版本怎么同时跑**：
+
+* **Apache**：mod_php 一个进程只能挂一个 PHP，所以**默认版本走 mod_php**，
+  其他版本各起一个 `php-cgi.exe -b 127.0.0.1:900x`，站点 vhost 里
+  `SetHandler "proxy:fcgi://127.0.0.1:900x/"` 把 `.php` 转过去。
+* **Nginx**：本来就不跑 PHP，所有站点都走 php-cgi，一个版本一个端口。
+
+端口分配：默认版本永远拿 `php.fastcgi_port`（9000），其余按版本号升序拿
+9001、9002…… 只要不改默认版本，端口就不会跳。换默认版本或装新版本之后
+`restart` 一下（面板里换个版本会自动重启）。
+
+**装 PHP 必须用线程安全（TS）的官方包** —— mod_php 只能挂 TS。`php install`
+自动挑那个（文件名里没有 `-nts-`），装完顺手生成 php.ini：`extension_dir`
+指到自己的 `ext/`、session 落到 `run/php-session`、`sendmail_path` 直接接到
+Mailpit，并按 `ext/` 里实际存在的 DLL 开启 curl / gd / intl / zip / opcache
+等 20 个常用扩展。缓存包在 `cache/php/`（约 36MB），删了也不影响已装的。
+
+**phpMyAdmin**：`php myadmin` 会从官方源下载最新版装到 `www/phpmyadmin`
+（于是它就是一个普通站点 `https://phpmyadmin.meow`），配好 root 免密登录 ——
+本地开发省得每次输密码。不想要了就跟删站点一样删掉。
 
 ## Mailpit：本地假邮箱
 
@@ -390,7 +430,7 @@ D:/meowbox/
 ## 图形界面：不用敲命令也能全管
 
 `pythonw meowbox.py gui`（或者双击 `meowbox-panel.vbs`）。菜单栏分成
-**文件 / 服务 / 站点 / 工具 / 帮助**，命令行有的功能这里基本都有：
+**文件 / 服务 / 站点 / PHP / 工具 / 帮助**，命令行有的功能这里基本都有：
 
 | 想做的事 | 菜单位置 |
 |---|---|
@@ -405,6 +445,7 @@ D:/meowbox/
 | HTTPS：启用 / 重签 / 看状态 / 信任 / 取消信任 / 关闭 | 工具 → HTTPS 证书 ▸ |
 | 打开邮箱、看有几封信、清空信箱 | 工具菜单 / 窗口右下「邮件收件箱」 |
 | 安装软件包（packages.conf） | 工具 → 安装软件包… |
+| PHP：换默认版本 / 装新版本 / 给选中站点换版本 / 开 php.ini / 开 phpMyAdmin | PHP 菜单（版本前面 ● 是默认） |
 | 从 Laragon 迁移站点 / 数据库 | 工具 → 从 Laragon 迁移站点和数据库… |
 | 生成双击启动器、开机自启、便携检查 | 文件菜单 |
 | 拉起系统托盘 | 工具 → 启动系统托盘 |
@@ -443,6 +484,12 @@ D:/meowbox/
 | `freeport <端口>` | 把占着端口的进程关掉（必要时弹 UAC）|
 | `db init` | 初始化 MySQL 数据目录（root 无密码） |
 | `pkg list / install <名字>` | 看清单 / 下载软件包 |
+| `php list` | 装了哪些 PHP 版本、默认是哪个、各占哪个 FastCGI 端口 |
+| `php install [8.5]` | 从 php.net 下载并安装一个 PHP（x64 线程安全包）|
+| `php use <版本>` | 换默认 PHP 版本 |
+| `php site <站点> [版本\|default]` | 看 / 改单个站点用哪个 PHP |
+| `php ini / open [版本]` | 打开 php.ini / PHP 目录 |
+| `php myadmin` | 安装（第一次）并打开 phpMyAdmin |
 
 ## 日志：自动记账 + 定期收拾
 
@@ -514,6 +561,8 @@ D:\meowbox\
 │   ├─ util.py             跑命令 / 看端口 / 判权限
 │   ├─ hosts.py            hosts 成对标记读写
 │   ├─ vhost.py            扫描 www/ → 生成虚拟主机（Apache / Nginx 各一套）
+│   ├─ php.py              PHP 多版本：扫描 / 下载安装 / 写 php.ini / php-cgi 进程池
+│   ├─ download.py         下载解压（纯标准库，冻结成 exe 也不缺工具）
 │   ├─ doctor.py           HTTPS 体检（六层排查 + 记录到 logs/https-check.log）
 │   ├─ logs.py             日志滚动 / 统计 / 清理
 │   ├─ apache.py           Apache 管家
@@ -672,6 +721,38 @@ vhost → 端口 → 真握手**。按这个顺序修，修哪层都不会白做
   有东西清才播报，没事就静默；面板启动只做 20MB 的提醒，**从不擅自动手删**。
   不用 Windows 计划任务，是因为它既装服务又写注册表，和喵盒的底线冲突。
 
+### PHP 多版本：一个 Apache 怎么同时跑两个 PHP
+
+mod_php 是**进程级**的：一个 httpd 只能挂一个 PHP。所以「站点级版本」只能靠
+FastCGI —— 默认版本继续走 mod_php（快、省事），其他版本另起一个
+`php-cgi.exe -b 127.0.0.1:900x`，站点 vhost 里把 `.php` 转过去。
+
+两个 Windows 专属的坑，都实测踩过：
+
+1. **`SetHandler "proxy:fcgi://127.0.0.1:9001"` 结尾那个 `/` 不能省。**
+   少了它，Apache 会把请求路径直接拼上去 —— Windows 路径以盘符开头，拼出来
+   成了 `fcgi://127.0.0.1:9001D:/meowbox/...`，于是它去解析「主机 9001d」，
+   报 `DNS lookup failure for: 127.0.0.1:9001d`。
+2. **光有 SetHandler 还不够。** mod_proxy_fcgi 送出去的 `SCRIPT_FILENAME`
+   是 `/D:/...`（带前导斜杠），Windows 上不算合法绝对路径，php-cgi 只回一句
+   `No input file specified`。必须再补一条
+   `ProxyFCGISetEnvIf "true" SCRIPT_FILENAME "%{reqenv:DOCUMENT_ROOT}%{reqenv:SCRIPT_NAME}"`
+   把路径自己拼对。
+   （社区里的 `#` 结尾、`ProxyPassMatch` 等偏方在这个版本上都不稳，别用。）
+
+顺带一个好处：这种写法下 php-cgi 的进程池是**按需**起的 —— 没有站点用 8.5，
+9001 上就不会有进程。
+
+### pid 文件里的号，可能已经是别人了
+
+Windows 会复用进程号。Mailpit 崩掉以后，`run/mailpit.pid` 里的 2292 可能被
+系统发给 `WUDFHost.exe` —— 如果只看「这个 pid 存在吗」，就会以为 Mailpit 还
+活着，然后去 taskkill 一个系统进程，失败了还报「多半是管理员权限，普通权限
+杀不掉」，把人吓得以为权限出了毛病。
+
+所以 `util.pid_is(pid, names)` 现在同时核对**进程名**：pid 在、名字也对，才
+算还活着。Apache / Nginx / MySQL / Mailpit / php-cgi 全都换成了它。
+
 ### 端口不是"想用就能用"
 
 这轮遇到两个都不是喵盒的锅、但表现一模一样（服务起不来、站点 500）的情况：
@@ -698,7 +779,8 @@ vhost → 端口 → 真握手**。按这个顺序修，修哪层都不会白做
 - [x] HTTPS 六层体检 + 一键修复（`meow/doctor.py`、面板「体检」按钮、`ssl check`）
 - [x] 日志：体检记录自动滚动 + `logs clean`（太旧/太大）+ 面板启动 20MB 提醒
       + 每周日 Hermes cron 自动清一次
-- [ ] PHP 多版本切换
+- [x] PHP 多版本：`bin/php/` 放几个就是几个，站点级切换 + `php install` 从官方源下载
+      + PHP 管理菜单（换默认、开 php.ini、phpMyAdmin）
 - [ ] 站点级 rewrite 配置（现在只能在 `auto.*.conf` 里手加，重渲就没了）
 
 > **明确不做**：装成 Windows 服务。喵盒的定位就是"绿色便携" —— 不注册服务、

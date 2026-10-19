@@ -60,7 +60,8 @@ def default_config(root: Path, provider: Path | None = None) -> dict:
         # web.server 决定喵盒看管哪一个 Web 服务器：apache / nginx（同时只跑一个）
         "web": {"server": "apache", "http_port": 80, "https_port": 443, "ssl": False},
         # nginx 自己不跑 PHP，要靠 php-cgi 的 FastCGI 端口
-        "php": {"fastcgi_port": 9000},
+        # version = 默认 PHP 版本（8.5 这种标签）；站点可以在 sites.php 里单独指定
+        "php": {"fastcgi_port": 9000, "version": None},
         # 本地假邮箱：SMTP 收信 + 网页看信
         "mailpit": {"enabled": True, "smtp_port": 1025, "http_port": 8025, "max_messages": 500},
         "mysql": {"enabled": True, "port": 3306},
@@ -79,6 +80,7 @@ def normalize(cfg: dict) -> dict:
     cfg["web"].setdefault("ssl", False)
     cfg.setdefault("php", {})
     cfg["php"].setdefault("fastcgi_port", 9000)
+    cfg["php"].setdefault("version", None)
     cfg.setdefault("mailpit", {})
     cfg["mailpit"].setdefault("enabled", True)
     cfg["mailpit"].setdefault("smtp_port", 1025)
@@ -87,6 +89,7 @@ def normalize(cfg: dict) -> dict:
     cfg.setdefault("sites", {})
     cfg["sites"].setdefault("tld", "meow")
     cfg["sites"].setdefault("www", "www")
+    cfg["sites"].setdefault("php", {})          # 站点名 → PHP 版本标签（8.5）
     cfg.setdefault("mysql", {"enabled": True, "port": 3306})
     return cfg
 
@@ -160,7 +163,22 @@ def discover(cfg: dict) -> dict:
     found: dict[str, Path | None] = {}
     for name, (sub, exe) in BIN_LAYOUT.items():
         found[name] = _find_version_dir(base / sub, exe)
+    # PHP 可能装了好几个版本：别按目录名倒序随便挑一个，
+    # 要跟「默认版本」保持一致，否则面板显示的路径和实际挂载的不是同一个。
+    found["php"] = _default_php_dir(cfg, found.get("php"))
     return found
+
+
+def _default_php_dir(cfg: dict, fallback):
+    try:
+        from . import php as phpmod
+        versions = phpmod.scan(cfg)
+        label = phpmod.default_label(cfg, versions)
+        if label:
+            return versions[label].dir
+    except Exception:                              # noqa: BLE001 —— 探测失败就用旧的
+        pass
+    return fallback
 
 
 def layout(cfg: dict) -> dict:

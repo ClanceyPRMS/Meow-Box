@@ -230,8 +230,8 @@ class TrayApp:
         return vhost.scan(self.lay["www"])
 
     def _sites(self):
-        tld = self.cfg["sites"]["tld"]
-        return [(n, f"http://{vhost.hostname_for(n, tld)}") for n in self._site_names()]
+        lay = self.lay
+        return [(n, vhost.site_url(self.cfg, lay, n)) for n in self._site_names()]
 
     def _status_text(self) -> str:
         parts = []
