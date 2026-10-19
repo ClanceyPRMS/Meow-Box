@@ -1,0 +1,30 @@
+[project]
+name = "meow-box"
+version = "0.1.0"
+description = "喵盒 Meow Box —— 轻量本地 Web 开发环境管家，Laragon 的绿色便携替代品"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{ name = "玛莉嘉 & 于光远" }]
+keywords = ["windows", "local-development", "apache", "nginx", "mysql", "php", "portable"]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development :: Build Tools",
+]
+
+# 运行时零第三方依赖 —— 这是喵盒的卖点之一，别往这里加东西。
+# 托盘（ctypes）、面板（tkinter）、图标（纯 Python 画）全用标准库。
+dependencies = []
+
+[dependency-groups]
+# 只有「打包成 exe」这一步才需要 PyInstaller。
+# 版本锁在 uv.lock 里：大版本一变，onedir 结构 / hook 行为就可能跟着变，
+# 打出来的包跟上次不一样 —— 这种漂移最难查。
+dev = ["pyinstaller>=6.22.3,<7"]
+
+[tool.uv]
+# 喵盒是「应用程序」不是「要 pip install 的库」：
+# 让 uv 只管依赖和虚拟环境，不要去 build/install 项目本身。
+package = false

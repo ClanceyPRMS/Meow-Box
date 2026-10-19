@@ -106,6 +106,30 @@ def localize(text) -> str:
     return out
 
 
+def _std_is_console(stream) -> bool:
+    """这个流是不是真的接着控制台窗口。
+
+    只看 `isatty()` 是不够的：**Windows 的 NUL 设备也是字符设备，`isatty()`
+    返回 True**，但它按 locale（GBK）编码，写 `🐾` 照样 `UnicodeEncodeError`。
+    所以再问一次 Win32 的 `GetConsoleMode` —— 只有真正的控制台才有"模式"这个属性。
+
+    实测：`meowbox.exe --help > NUL` 就崩在这上面（`> 文件` 反而没事，因为文件
+    的 isatty() 是 False）。
+    """
+    if not stream.isatty():
+        return False
+    try:
+        import ctypes
+
+        handle = ctypes.windll.kernel32.GetStdHandle(
+            -11 if stream is sys.stdout else -12      # STD_OUTPUT / STD_ERROR
+        )
+        mode = ctypes.c_uint32()
+        return bool(ctypes.windll.kernel32.GetConsoleMode(handle, ctypes.byref(mode)))
+    except Exception:
+        return True          # 判断不了就保守：当成控制台，不去动它的编码
+
+
 def prepare_stdio() -> None:
     """控制台输出别因为编码问题崩掉。
 
@@ -120,7 +144,7 @@ def prepare_stdio() -> None:
         if stream is None:
             continue
         try:
-            if stream.isatty():
+            if _std_is_console(stream):
                 continue
             stream.reconfigure(encoding="utf-8", errors="replace")
         except (AttributeError, ValueError, OSError):

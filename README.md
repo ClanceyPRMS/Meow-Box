@@ -19,14 +19,25 @@
 
 只需要 **Python 3.10+**，**零第三方依赖** —— 托盘是纯 `ctypes` 调 Win32，
 面板是 `tkinter`，图标是纯 Python 画的（连 Pillow 都没用）。只有打包成 exe
-那一步才需要 `pip install pyinstaller`。
+那一步才需要 PyInstaller。
+
+推荐用 [uv](https://docs.astral.sh/uv/) 管开发环境 —— 依赖和 Python 版本都锁在
+`uv.lock` / `.python-version` 里，换台机器结果也一样：
 
 ```bash
 git clone https://github.com/ClanceyPRMS/Meow-Box.git
 cd Meow-Box
-python meowbox.py init        # 生成 meowbox.config.json
-python meowbox.py info        # 看看探测到了什么
+uv sync                        # 建 .venv，按 uv.lock 装好（含打包用的 PyInstaller）
+uv run python meowbox.py init  # 生成 meowbox.config.json
+uv run python meowbox.py info  # 看看探测到了什么
 ```
+
+不想装 uv 也行：**运行时一个第三方包都不需要**，直接 `python meowbox.py ...`；
+只有打包那一步要 `pip install pyinstaller==6.22.3`。
+
+> **为什么把 Python 钉在 3.14**：托盘用 `ctypes.wintypes.HCURSOR`，某些精简 /
+> 嵌入式解释器（比如 IDE 自带的 venv）里没有这个常量，托盘一启动就
+> `AttributeError`。`.python-version` 写死 3.14 + `uv sync`，就不用靠记性挑解释器。
 
 仓库里**只有源码**：二进制（`bin/`）、网站（`www/`）、数据库（`data/`）、
 渲染出的配置（`etc/`）、日志（`logs/`）都在 `.gitignore` 里，各自在自己机器上生成。
@@ -332,10 +343,15 @@ python meowbox.py autostart on      # 如果要用开机自启，搬完重开一
 不想让喵盒依赖机器上的 Python，就把它打成 exe。一次打包，三个入口：
 
 ```bash
-C:/Python314/python.exe build_exe.py            # 打包，产物在 dist/MeowBox/
-C:/Python314/python.exe build_exe.py --install  # 打完自动放进喵盒根目录
-C:/Python314/python.exe build_exe.py --verify   # 打完跑一遍 info/status 自检
+uv run python build_exe.py            # 打包，产物在 dist/MeowBox/
+uv run python build_exe.py --install  # 打完自动放进喵盒根目录
+uv run python build_exe.py --verify   # 打完跑一遍 info/status 自检
 ```
+
+> 用的是 `uv.lock` 里锁死的那套环境（PyInstaller 6.22.3 / Python 3.14）。
+> **别用别的解释器打包** —— 精简版 Python 缺 `ctypes.wintypes.HCURSOR`，
+> 打出来的托盘 exe 会一启动就 `AttributeError`；PyInstaller 大版本变了，
+> 打出来的包也会跟上次不一样。这两类漂移都很难查，锁住最省心。
 
 | exe | 干什么 | 子系统 |
 |---|---|---|
@@ -479,6 +495,10 @@ python meowbox.py logs clean --days 3 --max-mb 5    # 换阈值
 ```
 D:\meowbox\
 ├─ meowbox.py              命令行入口（源码模式）
+├─ pyproject.toml          项目清单（名字/版本/Python 要求/开发依赖）
+├─ uv.lock                 依赖配方卡（精确版本，别手改）
+├─ .python-version         开发用的 Python 版本（3.14）
+├─ .venv\                  uv 建的虚拟环境（不进版本库）
 ├─ meowbox.exe             ┐
 ├─ meowbox-tray.exe        │ 打包版三个入口（双击就用，不用装 Python）
 ├─ meowbox-panel.exe       ┘

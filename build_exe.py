@@ -30,11 +30,21 @@ def human(size: int) -> str:
 
 
 def ensure_pyinstaller() -> None:
+    """没有 PyInstaller 就别自动装了。
+
+    以前这里是「没装就 pip install pyinstaller」—— 装到的是**最新版**。
+    哪天 PyInstaller 大版本一变，onedir 结构或 hook 行为就跟着变，打出来的包
+    跟上次不一样，而这种漂移是最难查的一类问题。版本现在锁在 `uv.lock` 里。
+    """
     try:
         import PyInstaller  # noqa: F401
+        return
     except ImportError:
-        print("→ 没装 PyInstaller，先装一个……")
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "pyinstaller"])
+        pass
+    print("✗ 没有 PyInstaller，先准备开发环境：")
+    print("    uv sync                          # 按 uv.lock 装，版本锁死（推荐）")
+    print("    pip install pyinstaller==6.22.3  # 没装 uv 的话")
+    raise SystemExit(1)
 
 
 def build(clean: bool = True) -> None:
