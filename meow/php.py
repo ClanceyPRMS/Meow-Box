@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import os
 import re
 import secrets
 import time
@@ -251,6 +252,19 @@ class CgiPool:
     def port(self, label: str) -> int:
         return self.ports[label]
 
+    # -- worker 数 --
+    @property
+    def children(self) -> int:
+        """每个版本起几个 php-cgi worker。
+
+        默认 1 个的话**一个慢请求就会把整池堵死**（实测：某个站点卡住后，
+        同一个 8.5 池里的其它站点全都 60 秒 504，直到重启 Web 服务器）。
+        """
+        try:
+            return max(1, int((self.cfg.get("php") or {}).get("cgi_children", 8)))
+        except (TypeError, ValueError):
+            return 8
+
     def start(self, labels: list[str]) -> dict[str, int]:
         started: dict[str, int] = {}
         for label in labels:
@@ -279,7 +293,10 @@ class CgiPool:
         cmd = [ver.cgi, "-b", f"127.0.0.1:{port}"]
         if ver.ini.is_file():
             cmd += ["-c", fwd(ver.ini)]
-        proc = popen(cmd, cwd=ver.dir, log_file=self.log_file(ver.label))
+        env = os.environ.copy()
+        env["PHP_FCGI_CHILDREN"] = str(self.children)
+        env["PHP_FCGI_MAX_REQUESTS"] = "1000"
+        proc = popen(cmd, cwd=ver.dir, log_file=self.log_file(ver.label), env=env)
         self.pid_file(ver.label).write_text(str(proc.pid), encoding="utf-8")
         for _ in range(40):
             if util.port_in_use(port):

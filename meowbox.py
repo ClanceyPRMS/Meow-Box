@@ -1166,6 +1166,19 @@ def cmd_php(args) -> int:
         print("  " + _php_apply(cfg, bins))
         return 0
 
+    if action == "restart":
+        # 卡住时不用重启整个 Web 服务器，只把 php-cgi 池换掉
+        pool = phpmod.CgiPool(cfg, versions)
+        stopped = pool.stop_all()
+        labels = pool.labels_for(_site_names(cfg), svcmod.server_name(cfg))
+        started = pool.start(labels) if labels else {}
+        _title("PHP 进程池已重启")
+        _row("停掉", "、".join(stopped) or "（本来就没在跑）")
+        _row("重新起", "、".join(f"{k} → :{pool.port(k)}" for k in started)
+             or "（没有站点需要 php-cgi）")
+        _row("worker", f"每版本 {pool.children} 个")
+        return 0
+
     if action in ("open", "ini"):
         label = (args.name or default or "").strip()
         if label not in versions:
@@ -1341,7 +1354,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("php", help="PHP 多版本：查看 / 安装 / 切换 / 打开 phpMyAdmin")
     p.add_argument("action", nargs="?", default="list",
-                   choices=["list", "install", "use", "site", "open", "ini", "myadmin"])
+                   choices=["list", "install", "use", "site", "open", "ini", "myadmin", "restart"])
     p.add_argument("name", nargs="?", help="版本号（8.5）、站点名，或 install 的目标版本")
     p.add_argument("version", nargs="?", help="php site <站点> <版本> 里的版本")
     p.set_defaults(func=cmd_php)

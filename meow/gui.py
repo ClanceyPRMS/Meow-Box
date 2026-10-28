@@ -1104,6 +1104,8 @@ class Panel:
         menu.add_command(label="安装 PHP 版本…（从 php.net 下载）", command=self.php_install)
         menu.add_command(label="给选中的站点换 PHP 版本…", command=self.php_set_site)
         menu.add_separator()
+        menu.add_command(label="重启 PHP 进程（站点卡住/504 时点这个）", command=self.php_restart_pool)
+        menu.add_separator()
         menu.add_command(label="打开 php.ini", command=self.php_open_ini)
         menu.add_command(label="打开 PHP 目录", command=self.php_open_dir)
         menu.add_separator()
@@ -1178,6 +1180,21 @@ class Panel:
         phpmod.set_site_version(self.cfg, name, None if answer in ("default", "默认") else answer)
         target = phpmod.site_label(self.cfg, name, versions)
         self._php_apply(f"{name} → PHP {target}")
+
+    def php_restart_pool(self) -> None:
+        """只重启 php-cgi 池，不动 Apache/Nginx（站点 504 卡住时用这个）。"""
+        def job():
+            versions = phpmod.scan(self.cfg)
+            if not versions:
+                return "还没装 PHP"
+            pool = phpmod.CgiPool(self.cfg, versions)
+            stopped = pool.stop_all()
+            labels = pool.labels_for(vhost.scan(self.lay["www"]),
+                                     svcmod.server_name(self.cfg))
+            started = pool.start(labels) if labels else {}
+            return (f"停掉 {('、'.join(stopped) or '无')}；"
+                    f"重新起 {('、'.join(started) or '无')}（每版本 {pool.children} worker）")
+        self._run("重启 PHP 进程", job)
 
     def php_open_ini(self) -> None:
         versions = phpmod.scan(self.cfg)

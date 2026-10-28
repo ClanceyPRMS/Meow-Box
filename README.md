@@ -196,6 +196,11 @@ python meowbox.py php myadmin            # 装 / 打开 phpMyAdmin
 9001、9002…… 只要不改默认版本，端口就不会跳。换默认版本或装新版本之后
 `restart` 一下（面板里换个版本会自动重启）。
 
+**每个版本默认起 8 个 php-cgi worker**（`php.cgi_children`）。这一步不能省：
+`php-cgi -b` 默认是单进程顺序处理，一个慢请求会把整个端口堵死 —— 实测一次卡住
+会让同一个 PHP 版本下的所有站点连续 504 六十秒。真卡住了用 `php restart`
+（面板 PHP 菜单里也有），只换进程池，不动 Apache/Nginx。
+
 **装 PHP 必须用线程安全（TS）的官方包** —— mod_php 只能挂 TS。`php install`
 自动挑那个（文件名里没有 `-nts-`），装完顺手生成 php.ini：`extension_dir`
 指到自己的 `ext/`、session 落到 `run/php-session`、`sendmail_path` 直接接到
@@ -489,6 +494,7 @@ D:/meowbox/
 | `php use <版本>` | 换默认 PHP 版本 |
 | `php site <站点> [版本\|default]` | 看 / 改单个站点用哪个 PHP |
 | `php ini / open [版本]` | 打开 php.ini / PHP 目录 |
+| `php restart` | 只重启 php-cgi 进程池（站点 504 卡住时用，不动 Web 服务器） |
 | `php myadmin` | 安装（第一次）并打开 phpMyAdmin |
 
 ## 日志：自动记账 + 定期收拾

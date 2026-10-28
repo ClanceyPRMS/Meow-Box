@@ -1,6 +1,6 @@
 [project]
 name = "meow-box"
-version = "0.2.0"
+version = "0.2.1"
 description = "喵盒 Meow Box —— 轻量本地 Web 开发环境管家，Laragon 的绿色便携替代品"
 readme = "README.md"
 requires-python = ">=3.10"

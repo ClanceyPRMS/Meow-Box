@@ -9,7 +9,8 @@
   },
   "php": {
     "fastcgi_port": 9000,
-    "version": null
+    "version": null,
+    "cgi_children": 8
   },
   "mailpit": {
     "enabled": true,

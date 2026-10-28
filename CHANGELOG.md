@@ -11,6 +11,26 @@
 
 - 站点级 rewrite 配置（现在要在 `auto.*.conf` 里手加，重新渲染就没了）
 
+## [0.2.1] - 2026-10-28
+
+「别再一个请求堵死整池」版。迁 7 个宝塔站的时候踩到的真问题。
+
+### 修复
+
+- **php-cgi 只起 1 个 worker**：默认情况下 `php-cgi -b` 是单进程顺序处理，
+  一个慢请求（或卡住的请求）会把整个版本的进程池堵死 —— 实测 504 持续 60 秒，
+  同一个端口上的其它站点跟着一起挂，只有重启 Web 服务器才恢复。
+  现在启动时带 `PHP_FCGI_CHILDREN=<php.cgi_children>`（默认 8）和
+  `PHP_FCGI_MAX_REQUESTS=1000`。实测 4 个并发 × 3 秒的请求 **3.1 秒**全部返回
+  （修之前要 12 秒），4 个请求落在 4 个不同 pid 上。
+
+### 新增
+
+- `php restart`：只重启 php-cgi 进程池，不动 Apache/Nginx。
+  站点突然 504、又不想整个 Web 服务器重启时用这个。
+- 面板 PHP 菜单加了「重启 PHP 进程（站点卡住/504 时点这个）」。
+- 配置项 `php.cgi_children`（默认 8）：每个 PHP 版本起几个 worker。
+
 ## [0.2.0] - 2026-10-19
 
 「PHP 版本自由」版。原来整个喵盒只有一个 PHP，现在一个站点一个版本。
@@ -170,6 +190,7 @@
 - **站点级 rewrite 要手改**：写进 `auto.*.conf`，重新渲染就没了
 - **喵盒和 Laragon 不能同时跑**：抢 80 / 3306 端口
 
-[未发布]: https://github.com/ClanceyPRMS/Meow-Box/compare/v0.2.0...HEAD
+[未发布]: https://github.com/ClanceyPRMS/Meow-Box/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/ClanceyPRMS/Meow-Box/releases/tag/v0.2.1
 [0.2.0]: https://github.com/ClanceyPRMS/Meow-Box/releases/tag/v0.2.0
 [0.1.0]: https://github.com/ClanceyPRMS/Meow-Box/releases/tag/v0.1.0

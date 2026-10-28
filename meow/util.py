@@ -93,8 +93,12 @@ def run(cmd, cwd=None, timeout=60, env=None):
         return 124, "", "命令超时: " + " ".join(str(c) for c in cmd)
 
 
-def popen(cmd, cwd=None, log_file=None):
-    """以后台方式启动一个进程（不阻塞）。"""
+def popen(cmd, cwd=None, log_file=None, env=None):
+    """以后台方式启动一个进程（不阻塞）。
+
+    env 传了就整个替换子进程环境（调用方通常基于 os.environ 改几个再传进来），
+    php-cgi 的 PHP_FCGI_CHILDREN 就是靠它设置的。
+    """
     out = None
     if log_file:
         ensure_dir(Path(log_file).parent)
@@ -105,6 +109,7 @@ def popen(cmd, cwd=None, log_file=None):
         stdout=out or subprocess.DEVNULL,
         stderr=subprocess.STDOUT if out else subprocess.DEVNULL,
         stdin=subprocess.DEVNULL,
+        env=env,
         creationflags=CREATE_NO_WINDOW,
     )
     return proc
