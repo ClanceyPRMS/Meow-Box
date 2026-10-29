@@ -604,9 +604,14 @@ class Panel:
             result = hostsmod.sync(names, apply=True)
             if result.get("error"):
                 raise PermissionError(result["error"])
+            tld = self.cfg["sites"]["tld"]
+            bypass = hostsmod.ensure_proxy_bypass(tld)
+            extra = ""
+            if bypass.get("changed"):
+                extra = "；代理绕过已加 " + "、".join(bypass["added"])
             if not result["applied"]:
-                return "已经是最新的，不用改"
-            return "已写入 " + ", ".join(names)
+                return "主机条目已经是最新的" + extra
+            return "已写入 " + ", ".join(names) + extra
         self._run("同步 hosts", job)
 
     def free_ports(self) -> None:

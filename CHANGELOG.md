@@ -11,6 +11,22 @@
 
 - 站点级 rewrite 配置（现在要在 `auto.*.conf` 里手加，重新渲染就没了）
 
+## [0.2.2] - 2026-10-28
+
+「本地域名别走代理」版。
+
+### 新增
+
+- **`hosts --apply` / 面板「同步 hosts」会顺带写代理绕过列表**：把 `*.meow`
+  （以及 `*.loc`、`*.test`）加进当前用户的 ProxyOverride（HKCU，不需要管理员），
+  并调 `InternetSetOption` 通知系统刷新。
+  不写这一步的话，开着 Clash / Watt Toolkit 这类代理时，浏览器会把 `mq.meow`
+  也丢给代理，代理去远端解析这个域名当然失败，于是报
+  **ERR_TUNNEL_CONNECTION_FAILED** —— 看起来像站点挂了，其实请求根本没到本机 Apache。
+- `hosts` 命令的输出里多一行「代理绕过」，能看到是「已加」还是「已经包含」。
+
+> 已经在开的浏览器要重启一次才会读新的绕过列表（系统级设置刷新了，进程里还缓存着）。
+
 ## [0.2.1] - 2026-10-28
 
 「别再一个请求堵死整池」版。迁 7 个宝塔站的时候踩到的真问题。
@@ -190,7 +206,8 @@
 - **站点级 rewrite 要手改**：写进 `auto.*.conf`，重新渲染就没了
 - **喵盒和 Laragon 不能同时跑**：抢 80 / 3306 端口
 
-[未发布]: https://github.com/ClanceyPRMS/Meow-Box/compare/v0.2.1...HEAD
+[未发布]: https://github.com/ClanceyPRMS/Meow-Box/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/ClanceyPRMS/Meow-Box/releases/tag/v0.2.2
 [0.2.1]: https://github.com/ClanceyPRMS/Meow-Box/releases/tag/v0.2.1
 [0.2.0]: https://github.com/ClanceyPRMS/Meow-Box/releases/tag/v0.2.0
 [0.1.0]: https://github.com/ClanceyPRMS/Meow-Box/releases/tag/v0.1.0

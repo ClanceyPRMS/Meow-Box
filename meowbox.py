@@ -532,14 +532,27 @@ def cmd_web(args) -> int:
 
 def cmd_hosts(args) -> int:
     cfg, _ = _load(Path(args.root))
+    tld = cfg["sites"]["tld"]
     hosts_file = Path(args.hosts_file) if args.hosts_file else hostsmod.default_path()
-    names = [vhost.hostname_for(n, cfg["sites"]["tld"]) for n in _site_names(cfg)]
+    names = [vhost.hostname_for(n, tld) for n in _site_names(cfg)]
     result = hostsmod.sync(names, path=hosts_file, apply=args.apply)
     _title("hosts 同步")
     _row("文件", result["path"])
     _row("管理员", "是" if result["admin"] else "否")
     _row("已有条目", ", ".join(result["before"]) or "（无）")
     _row("目标条目", ", ".join(result["after"]) or "（无）")
+
+    # 代理绕过：不写这一步的话，开着 Clash/加速器时浏览器会报
+    # ERR_TUNNEL_CONNECTION_FAILED（请求根本没到本机 Apache）
+    if args.apply:
+        bypass = hostsmod.ensure_proxy_bypass(tld)
+        if bypass.get("changed"):
+            _row("代理绕过", "已加 " + "、".join(bypass["added"]))
+        elif bypass.get("error"):
+            _row("代理绕过", "没改成功：" + bypass["error"])
+        else:
+            _row("代理绕过", "已经包含 *." + tld)
+
     if result.get("error"):
         print(f"\n  ❌ {result['error']}")
         return 1

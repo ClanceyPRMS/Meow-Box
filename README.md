@@ -473,7 +473,7 @@ D:/meowbox/
 | `mail [status\|open\|clear]` | Mailpit：看状态 / 打开收件箱 / 清空信箱 |
 | `render` | 重新生成所有配置文件（Nginx 会自动 reload） |
 | `check` | 让当前 Web 服务器做语法自检（`httpd -t` / `nginx -t`） |
-| `hosts [--apply]` | 预览 / 写入 hosts 条目 |
+| `hosts [--apply]` | 预览 / 写入 hosts 条目（`--apply` 时顺带把 `*.meow` 加进代理绕过列表） |
 | `ssl [on\|check\|list\|renew\|trust\|untrust\|off]` | 自签 HTTPS 证书（一键）/ `check` = 六层体检 |
 | `logs [clean] [--dry-run]` | 看日志占用 / 清理太旧（7 天）、太大（2MB）的 |
 | `tray [--selftest]` | 启动系统托盘图标 |
