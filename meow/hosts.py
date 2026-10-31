@@ -125,19 +125,32 @@ def proxy_bypass_entries() -> list[str]:
         return []
 
 
-def ensure_proxy_bypass(tld: str = "meow", extra=("loc", "test")) -> dict:
-    """把 `*.meow` 这类本地域名加进「代理绕过列表」。
+def ensure_proxy_bypass(tld: str = "meow", hostnames=(), extra=("loc", "test")) -> dict:
+    """把本地站点的域名加进「代理绕过列表」。
 
     为什么必须做：装了 Clash / Watt Toolkit 之类的代理工具时，浏览器会把
     `mq.meow` 也丢给代理，代理去远端解析这个域名当然失败，于是报
     **ERR_TUNNEL_CONNECTION_FAILED** —— 看起来像站点挂了，其实是请求没到本机 Apache。
-    这一步只动当前用户（HKCU），不需要管理员。
+
+    加两类东西，都不写死：
+    * `*.<当前后缀>` —— 后缀来自 `sites.tld`，用户改成 `.lh`、`.dev`、`.abc` 都跟着变；
+    * **每个站点的完整域名** —— 万一后缀是空的（域名就是站点名），或者用户在
+      浏览器里用了别的写法，逐条列出来最保险。
+
+    只动当前用户（HKCU），不需要管理员。
     """
     if os.name != "nt":
         return {"changed": False, "skipped": "只有 Windows 需要"}
     import winreg
 
-    wanted = [f"*.{t}" for t in (tld, *extra) if t]
+    wanted: list[str] = []
+    if tld:
+        wanted.append(f"*.{tld}")
+    wanted += [h for h in hostnames if h]
+    wanted += [f"*.{t}" for t in extra if t]
+    # 去重但保序
+    wanted = list(dict.fromkeys(wanted))
+
     current = proxy_bypass_entries()
     have = {p.strip().lower() for p in current}
     added = [w for w in wanted if w.lower() not in have]

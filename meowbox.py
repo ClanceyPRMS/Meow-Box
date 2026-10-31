@@ -545,13 +545,15 @@ def cmd_hosts(args) -> int:
     # 代理绕过：不写这一步的话，开着 Clash/加速器时浏览器会报
     # ERR_TUNNEL_CONNECTION_FAILED（请求根本没到本机 Apache）
     if args.apply:
-        bypass = hostsmod.ensure_proxy_bypass(tld)
+        bypass = hostsmod.ensure_proxy_bypass(tld, names)
         if bypass.get("changed"):
-            _row("代理绕过", "已加 " + "、".join(bypass["added"]))
+            added = bypass["added"]
+            shown = "、".join(added[:4]) + (f" 等 {len(added)} 条" if len(added) > 4 else "")
+            _row("代理绕过", "已加 " + shown)
         elif bypass.get("error"):
             _row("代理绕过", "没改成功：" + bypass["error"])
         else:
-            _row("代理绕过", "已经包含 *." + tld)
+            _row("代理绕过", f"已经包含 *.{tld} 和 {len(names)} 个站点域名")
 
     if result.get("error"):
         print(f"\n  ❌ {result['error']}")

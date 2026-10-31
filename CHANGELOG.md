@@ -11,6 +11,19 @@
 
 - 站点级 rewrite 配置（现在要在 `auto.*.conf` 里手加，重新渲染就没了）
 
+## [0.2.3] - 2026-10-28
+
+### 改进
+
+- **代理绕过不再写死后缀**：`hosts --apply` / 面板「同步 hosts」现在会写两类条目 ——
+  `*.<当前后缀>`（跟着 `sites.tld` 走，改成 `.lh` / `.dev` / `.abc` 都会自动跟上），
+  以及**每个站点的完整域名**。这样即使用户用了一个奇奇怪怪的后缀、
+  或者干脆把后缀设成空（域名就是站点名），也都在绕过列表里。
+  后缀为空时不会拼出一个无效的 `*.`。
+- **面板新增「站点 → 打开 hosts 文件（编辑）…」**：当前没有管理员权限时，
+  会弹 UAC 拉起一个**管理员身份的记事本**，改完 Ctrl+S 就能保存
+  （用普通记事本打开 hosts 改了也存不进去，只会提示「拒绝访问」）。
+
 ## [0.2.2] - 2026-10-28
 
 「本地域名别走代理」版。
@@ -206,7 +219,8 @@
 - **站点级 rewrite 要手改**：写进 `auto.*.conf`，重新渲染就没了
 - **喵盒和 Laragon 不能同时跑**：抢 80 / 3306 端口
 
-[未发布]: https://github.com/ClanceyPRMS/Meow-Box/compare/v0.2.2...HEAD
+[未发布]: https://github.com/ClanceyPRMS/Meow-Box/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/ClanceyPRMS/Meow-Box/releases/tag/v0.2.3
 [0.2.2]: https://github.com/ClanceyPRMS/Meow-Box/releases/tag/v0.2.2
 [0.2.1]: https://github.com/ClanceyPRMS/Meow-Box/releases/tag/v0.2.1
 [0.2.0]: https://github.com/ClanceyPRMS/Meow-Box/releases/tag/v0.2.0

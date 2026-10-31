@@ -212,6 +212,7 @@ class Panel:
         m_site.add_command(label="打开选中站点", command=self._open_selected)
         m_site.add_separator()
         m_site.add_command(label="同步 hosts（需要管理员）", command=self.sync_hosts)
+        m_site.add_command(label="打开 hosts 文件（编辑）…", command=self.open_hosts_file)
         m_site.add_command(label="修改域名后缀…", command=self.ask_tld)
         menubar.add_cascade(label="站点", menu=m_site)
 
@@ -605,14 +606,32 @@ class Panel:
             if result.get("error"):
                 raise PermissionError(result["error"])
             tld = self.cfg["sites"]["tld"]
-            bypass = hostsmod.ensure_proxy_bypass(tld)
+            bypass = hostsmod.ensure_proxy_bypass(tld, names)
             extra = ""
             if bypass.get("changed"):
-                extra = "；代理绕过已加 " + "、".join(bypass["added"])
+                added = bypass["added"]
+                shown = "、".join(added[:3]) + (f" 等 {len(added)} 条" if len(added) > 3 else "")
+                extra = "；代理绕过已加 " + shown
             if not result["applied"]:
                 return "主机条目已经是最新的" + extra
             return "已写入 " + ", ".join(names) + extra
         self._run("同步 hosts", job)
+
+    def open_hosts_file(self) -> None:
+        """用「管理员记事本」打开 hosts —— 不然改了存不进去。"""
+        path = hostsmod.default_path()
+        if util.is_admin():
+            util.open_path(path)
+            self.log(f"已打开 {path}（当前就有管理员权限，直接保存即可）")
+            return
+        if not messagebox.askyesno(
+                "喵盒", f"hosts 只有管理员能保存。\n\n{path}\n\n"
+                        "要弹 UAC、用管理员的记事本打开吗？（改完 Ctrl+S 保存）"):
+            return
+        if util.shell_execute_elevated("notepad.exe", f'"{path}"'):
+            self.log("已用管理员权限打开 hosts —— 改完记得 Ctrl+S 保存")
+        else:
+            messagebox.showerror("喵盒", "提权失败（UAC 被取消了？）")
 
     def free_ports(self) -> None:
         """把被「不是喵盒启动的」进程占着的端口抢回来（没权限会弹 UAC）。"""

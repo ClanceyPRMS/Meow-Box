@@ -444,7 +444,8 @@ D:/meowbox/
 | 初始化 MySQL 数据目录 | 服务 → 初始化 MySQL 数据目录… |
 | 释放被占端口 | 服务菜单 / 按钮 |
 | 新建 / 删除 / 打开站点 | 站点菜单 / 站点列表下面的三个按钮（双击列表也能打开） |
-| 同步 hosts | 站点菜单 / 按钮 |
+| 同步 hosts | 站点菜单 / 按钮（顺带写代理绕过列表） |
+| 打开 / 编辑 hosts 文件 | 站点 → 打开 hosts 文件（编辑）…（自动用管理员记事本打开） |
 | 改域名后缀 | 站点 → 修改域名后缀…（也可以在窗口里直接改） |
 | 重新生成配置（含 `-t` 自检） | 文件菜单 / 按钮 |
 | HTTPS：启用 / 重签 / 看状态 / 信任 / 取消信任 / 关闭 | 工具 → HTTPS 证书 ▸ |
@@ -473,7 +474,7 @@ D:/meowbox/
 | `mail [status\|open\|clear]` | Mailpit：看状态 / 打开收件箱 / 清空信箱 |
 | `render` | 重新生成所有配置文件（Nginx 会自动 reload） |
 | `check` | 让当前 Web 服务器做语法自检（`httpd -t` / `nginx -t`） |
-| `hosts [--apply]` | 预览 / 写入 hosts 条目（`--apply` 时顺带把 `*.meow` 加进代理绕过列表） |
+| `hosts [--apply]` | 预览 / 写入 hosts 条目（`--apply` 时顺带把当前后缀和每个站点域名加进代理绕过列表） |
 | `ssl [on\|check\|list\|renew\|trust\|untrust\|off]` | 自签 HTTPS 证书（一键）/ `check` = 六层体检 |
 | `logs [clean] [--dry-run]` | 看日志占用 / 清理太旧（7 天）、太大（2MB）的 |
 | `tray [--selftest]` | 启动系统托盘图标 |
