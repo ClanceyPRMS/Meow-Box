@@ -68,6 +68,9 @@ def default_config(root: Path, provider: Path | None = None) -> dict:
         "mysql": {"enabled": True, "port": 3306},
         "sites": {"tld": "meow", "www": "www"},
         "autostart": ["apache", "mysql"],
+        # 界面上的偏好（不影响服务，只是"用起来顺不顺手"）
+        # tray_with_panel：开控制面板时顺便把托盘拉起来（关掉面板还能在托盘里启停）
+        "ui": {"tray_with_panel": True},
         "openssl": None,
     }
 
@@ -93,6 +96,8 @@ def normalize(cfg: dict) -> dict:
     cfg["sites"].setdefault("www", "www")
     cfg["sites"].setdefault("php", {})          # 站点名 → PHP 版本标签（8.5）
     cfg.setdefault("mysql", {"enabled": True, "port": 3306})
+    cfg.setdefault("ui", {})
+    cfg["ui"].setdefault("tray_with_panel", True)
     return cfg
 
 

@@ -11,6 +11,44 @@
 
 - 站点级 rewrite 配置（现在要在 `auto.*.conf` 里手加，重新渲染就没了）
 
+## [0.2.5] - 2026-10-31
+
+「面板不卡了，托盘也不再要手点」版。
+
+### 修复
+
+- **控制面板时不时「未响应」**：不是界面画得慢，是**查询**慢。
+  每 2.5 秒一轮的状态刷新里，`services.status()` / `blocked_ports()` /
+  `port_holder()` 全靠起 `tasklist`（本机实测 0.9 秒/次），一轮合计约 3 秒，
+  而且全在主线程 —— 窗口等于每隔 2.5 秒冻结 3 秒。现在：
+  - 进程名改走 `OpenProcess` + `QueryFullProcessImageNameW`
+    （`util.image_name()`），监听端口改走 `GetExtendedTcpTable`
+    （`TCP_TABLE_OWNER_PID_LISTENER`），`tasklist` / `netstat` 只当回退；
+    `status()` 1.083s → 0.0012s，`listeners()` 0.95s → 0.002s；
+  - 采集搬到后台线程（`gui._poll_status()`），主线程只负责把结果画上去。
+- **面板启动后托盘不会自己起来**：以前只有「工具 → 启动系统托盘」一个手动项。
+  现在面板起来 400 毫秒后自动拉一次托盘；`tray.is_running()` 用
+  `OpenMutexW` 查单实例互斥量（只查不占），已在跑就不重复拉。
+  开关在「文件 → 开面板时顺便带起托盘」（配置项 `ui.tray_with_panel`，默认开）。
+- **日志框越用越涩**：只保留最近 600 行。
+- **HTTPS 状态行**重复调用 `certutil`（0.2 秒/次）→ 缓存 20 秒，
+  信任库有变更（启用/重签/信任/关闭）时立刻作废。
+
+### 验证（本机实测）
+
+- `util.pid_is` / `listeners()` / `services.status()` 的耗时对比见上；
+- 无头跑面板 12 秒（`tk.update()` 泵事件），主线程单轮最长 362 毫秒（窗口首次
+  渲染），其余全部 < 50 毫秒；`_tick` 自身 ≤ 0.5 毫秒；
+- **打包版实测**：`meowbox-panel.exe` 窗口起来后，用
+  `SendMessageTimeoutW(WM_NULL)` 每 0.5 秒戳一次、连戳 16 秒（Windows 判定
+  「未响应」就是看这个消息循环回不回）：**最长 1 ms、中位 0.1 ms、
+  `IsHungAppWindow` 0 次**；
+- 面板进程启动后 `meowbox-tray.exe` 作为它的子进程出现（PID 对得上），
+  `logs/meowbox-tray.log` 里是 `Shell_NotifyIcon -> True`，面板日志里是
+  `[OK] 托盘已在后台启动`；
+- 状态标签 `● Apache / ● MySQL / ● Mailpit`，端口行 `80 正常 443 正常 3306 正常
+  | 2525 正常 8025 正常`，站点 `https://mq.meow` / `https://sandboxwp.meow` 仍 200。
+
 ## [0.2.4] - 2026-10-31
 
 「同步 hosts 真的会写了」版。

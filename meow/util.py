@@ -137,6 +137,112 @@ def who_holds_port(port: int) -> str:
     return f"{info[1]} (pid {info[0]})" if info else ""
 
 
+# ---------------------------------------------------------------- Win32 快路
+# `tasklist` 在这台机器上要 **0.9 秒**、`netstat` 0.09 秒。面板每 2.5 秒刷一次
+# 状态、托盘每次弹菜单都要查一遍，几个服务加起来就是 3 秒 —— 窗口直接「未响应」。
+# 所以端口和进程名一律先走 Win32 API（微秒级），子进程那套只当回退。
+_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+_ERROR_INVALID_PARAMETER = 87
+_TCP_TABLE_OWNER_PID_LISTENER = 3
+_AF_INET = 2
+
+_win_dll = {}
+
+
+def _win32():
+    """(kernel32, iphlpapi)，签名声明好再返回；不是 Windows 就 (None, None)。"""
+    if not IS_WINDOWS:
+        return None, None
+    if not _win_dll:
+        from ctypes import wintypes
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.QueryFullProcessImageNameW.argtypes = [
+            wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR,
+            ctypes.POINTER(wintypes.DWORD)]
+        kernel32.QueryFullProcessImageNameW.restype = wintypes.BOOL
+
+        class MIB_TCPROW_OWNER_PID(ctypes.Structure):
+            _fields_ = [("dwState", wintypes.DWORD),
+                        ("dwLocalAddr", wintypes.DWORD),
+                        ("dwLocalPort", wintypes.DWORD),
+                        ("dwRemoteAddr", wintypes.DWORD),
+                        ("dwRemotePort", wintypes.DWORD),
+                        ("dwOwningPid", wintypes.DWORD)]
+
+        iphlpapi = ctypes.WinDLL("iphlpapi", use_last_error=True)
+        iphlpapi.GetExtendedTcpTable.argtypes = [
+            wintypes.LPVOID, ctypes.POINTER(wintypes.DWORD), wintypes.BOOL,
+            wintypes.ULONG, ctypes.c_int, wintypes.ULONG]
+        iphlpapi.GetExtendedTcpTable.restype = wintypes.DWORD
+        _win_dll.update(kernel32=kernel32, iphlpapi=iphlpapi, row=MIB_TCPROW_OWNER_PID,
+                        wintypes=wintypes)
+    return _win_dll["kernel32"], _win_dll["iphlpapi"]
+
+
+def image_name(pid):
+    """进程的映像名（`httpd.exe`）。
+
+    返回值三种意思：
+    * `"httpd.exe"` —— 进程在，名字拿到了；
+    * `""`        —— **这个 pid 上没有进程**（已经退出了）；
+    * `None`      —— 查不了（权限不够 / 不是 Windows / API 失败），
+      调用方要回退到 `tasklist`。
+
+    区分后两种很重要：只回 False 的话，进程没了就会每次都去起一个
+    0.9 秒的 tasklist。
+    """
+    kernel32, _ = _win32()
+    if kernel32 is None:
+        return None
+    try:
+        handle = kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+    except Exception:                                  # noqa: BLE001
+        return None
+    if not handle:
+        return "" if ctypes.get_last_error() == _ERROR_INVALID_PARAMETER else None
+    try:
+        buf = ctypes.create_unicode_buffer(1024)
+        size = _win_dll["wintypes"].DWORD(len(buf))
+        if not kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
+            return None
+        return buf.value.rsplit("\\", 1)[-1]
+    except Exception:                                  # noqa: BLE001
+        return None
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _listening_ports_win32():
+    """{端口: pid} —— GetExtendedTcpTable 一次拿全，约 1 毫秒。失败返回 None。"""
+    _, iphlpapi = _win32()
+    if iphlpapi is None:
+        return None
+    try:
+        wintypes = _win_dll["wintypes"]
+        size = wintypes.DWORD(0)
+        iphlpapi.GetExtendedTcpTable(None, ctypes.byref(size), False, _AF_INET,
+                                     _TCP_TABLE_OWNER_PID_LISTENER, 0)
+        buf = ctypes.create_string_buffer(max(size.value, 4))
+        rc = iphlpapi.GetExtendedTcpTable(buf, ctypes.byref(size), False, _AF_INET,
+                                          _TCP_TABLE_OWNER_PID_LISTENER, 0)
+        if rc != 0:
+            return None
+        count = ctypes.cast(buf, ctypes.POINTER(wintypes.DWORD)).contents.value
+        if not count:
+            return {}
+        rows = ctypes.cast(
+            ctypes.byref(buf, ctypes.sizeof(wintypes.DWORD)),
+            ctypes.POINTER(_win_dll["row"] * count)).contents
+        # dwLocalPort 是网络字节序，低 16 位才是端口
+        return {((r.dwLocalPort & 0xFF) << 8) | ((r.dwLocalPort >> 8) & 0xFF): r.dwOwningPid
+                for r in rows}
+    except Exception:                                  # noqa: BLE001
+        return None
+
+
 # netstat + tasklist 都不便宜，缓存一下，免得界面每 2.5 秒刷一次就起一堆子进程
 _LISTEN_CACHE = {"at": 0.0, "map": {}}
 
@@ -146,12 +252,8 @@ def invalidate_listeners() -> None:
     _LISTEN_CACHE["map"] = {}
 
 
-def listeners(ttl: float = 1.5) -> dict:
-    """{端口: (pid, 进程名)} —— 当前所有正在监听 TCP 的端口。"""
-    now = time.time()
-    if ttl and _LISTEN_CACHE["map"] and now - _LISTEN_CACHE["at"] < ttl:
-        return _LISTEN_CACHE["map"]
-
+def _listeners_shell() -> dict:
+    """回退方案：netstat + tasklist（慢，但任何 Windows 都能用）。"""
     by_port: dict[int, int] = {}
     rc, out, _ = run(["netstat", "-ano", "-p", "TCP"])
     if rc == 0:
@@ -171,7 +273,24 @@ def listeners(ttl: float = 1.5) -> dict:
             if len(cols) >= 2 and cols[1].isdigit():
                 names[int(cols[1])] = cols[0]
 
-    result = {port: (pid, names.get(pid, "未知程序")) for port, pid in by_port.items()}
+    return {port: (pid, names.get(pid, "未知程序")) for port, pid in by_port.items()}
+
+
+def listeners(ttl: float = 1.5) -> dict:
+    """{端口: (pid, 进程名)} —— 当前所有正在监听 TCP 的端口。"""
+    now = time.time()
+    if ttl and _LISTEN_CACHE["map"] and now - _LISTEN_CACHE["at"] < ttl:
+        return _LISTEN_CACHE["map"]
+
+    by_port = _listening_ports_win32()
+    if by_port is None:                                # 非 Windows / API 失败
+        result = _listeners_shell()
+    else:
+        result = {}
+        for port, pid in by_port.items():
+            name = image_name(pid)
+            result[port] = (pid, name or "未知程序")
+
     _LISTEN_CACHE.update({"at": now, "map": result})
     return result
 
@@ -240,9 +359,22 @@ def pid_is(pid, names) -> bool:
     于是 `run/mailpit.pid` 里的 2292 可能已经变成 WUDFHost.exe ——
     再「停」它就会去杀一个系统进程，还报「停不掉，多半是管理员权限」，
     把人吓得以为权限出了问题。实测踩过（2026-10）。
+
+    先走 `image_name()` 的 Win32 快路（微秒级）；查不到名字时才退回
+    `tasklist`（0.9 秒）—— 面板每 2.5 秒问一次，几条服务加起来能顶到 3 秒，
+    窗口就「未响应」了。
     """
     if not pid:
         return False
+    name = image_name(pid)
+    if name is not None:
+        low = name.lower()
+        return any(str(n).lower() in low for n in names)
+    return _pid_is_shell(pid, names)
+
+
+def _pid_is_shell(pid, names) -> bool:
+    """回退方案：问 tasklist（慢但准）。"""
     rc, out, _ = run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], timeout=20)
     if str(pid) not in out:
         return False

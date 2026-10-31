@@ -15,6 +15,7 @@ import re
 import shutil
 import sys
 import threading
+import time
 import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox, simpledialog, ttk
@@ -63,6 +64,9 @@ class Panel:
         self.services = svcmod.build(self.cfg, self.bins)
         self.lay = cfgmod.layout(self.cfg)
         self.queue: queue.Queue = queue.Queue()
+        self._polling = False            # 状态采集是不是已经在后台跑了
+        self._ssl_cache = None           # (时间, 是否受信任)：certutil 要 0.2 秒，别每次都问
+        self._log_lines = 0
 
         self.tk = tk.Tk()
         self.tk.title("喵盒 Meow Box")
@@ -81,6 +85,8 @@ class Panel:
         self.refresh()
         self.tk.after(150, self._drain)
         self.tk.after(2500, self._tick)
+        # 托盘跟着面板一起起来 —— 关掉面板也能在托盘里一键起停
+        self.tk.after(400, self.ensure_tray)
 
     # ------------------------------------------------------------ 界面
     def _build(self) -> None:
@@ -189,6 +195,11 @@ class Panel:
         self.var_autostart = tk.BooleanVar(value=self._autostart_enabled())
         m_file.add_checkbutton(label="开机自动启动（启动文件夹里的 .vbs）",
                                variable=self.var_autostart, command=self.toggle_autostart)
+        self.var_tray_with_panel = tk.BooleanVar(
+            value=bool((self.cfg.get("ui") or {}).get("tray_with_panel", True)))
+        m_file.add_checkbutton(label="开面板时顺便带起托盘",
+                               variable=self.var_tray_with_panel,
+                               command=self.toggle_tray_with_panel)
         m_file.add_separator()
         m_file.add_command(label="便携检查…", command=self.portable_check)
         m_file.add_separator()
@@ -271,6 +282,12 @@ class Panel:
     def log(self, text: str) -> None:
         self.log_text.configure(state="normal")
         self.log_text.insert("end", text.rstrip() + "\n")
+        self._log_lines += text.count("\n") + 1
+        # 日志框越攒越长，Tk 的 Text 到最后连滚动都发涩 —— 只留最近 600 行
+        if self._log_lines > 600:
+            drop = self._log_lines - 400
+            self.log_text.delete("1.0", f"{drop + 1}.0")
+            self._log_lines -= drop
         self.log_text.see("end")
         self.log_text.configure(state="disabled")
 
@@ -299,6 +316,11 @@ class Panel:
             if kind == "log":                       # 后台的进度输出，直接转进日志框
                 self.log(message)
                 continue
+            if kind == "status":                    # 后台采集回来的服务/端口状态
+                self._polling = False
+                if message:
+                    self._apply_status(message)
+                continue
             mark = "[OK]" if kind == "ok" else "[!!]"
             if kind == "ssl-report":
                 problems = sum(1 for level, _i, _n in message["checks"] if level == "warn")
@@ -314,7 +336,7 @@ class Panel:
         self.tk.after(150, self._drain)
 
     def _tick(self) -> None:
-        self._refresh_status()
+        self._poll_status()
         self.tk.after(2500, self._tick)
 
     # ------------------------------------------------------------ 刷新
@@ -336,8 +358,37 @@ class Panel:
         """配置可能被换过服务器 —— 重新按配置建一次服务表（很便宜，不碰进程）。"""
         self.services = svcmod.build(self.cfg, self.bins)
 
-    def _refresh_status(self) -> None:
-        states = dict(svcmod.status(self.services))
+    def _poll_status(self) -> None:
+        """采集丢后台线程 —— 主线程一下都不许等。
+
+        以前这里直接在 Tk 主线程里调 `svcmod.status()` + `blocked_ports()` +
+        每个端口 `port_holder()`：每个都要起 `tasklist`（实测 0.9 秒/次），
+        三条服务加起来 1 秒以上，2.5 秒一轮 —— 窗口一半时间是「未响应」。
+        `util` 那边已经把子进程换成 Win32 API（毫秒级），这里再兜一层，
+        免得哪天某个 API 慢下来又把界面拖死。
+        """
+        if self._polling:                        # 上一轮还没回来，别叠罗汉
+            return
+        self._polling = True
+        services = self.services
+
+        def worker():
+            try:
+                snapshot = {
+                    "states": dict(svcmod.status(services)),
+                    "blocked": set(svcmod.blocked_ports(services)),
+                    "ports": [(port, util.port_holder(port))
+                              for port in svcmod.service_ports(services)],
+                }
+            except Exception:                    # noqa: BLE001 —— 采集失败就别动界面
+                snapshot = None
+            self.queue.put(("", "status", snapshot))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _apply_status(self, snapshot: dict) -> None:
+        """把后台采到的状态画到界面上（只在主线程里跑）。"""
+        states = snapshot["states"]
         for name, label in self.svc_labels.items():
             state = states.get(name, "已停止")
             pretty = svcmod.pretty(name)
@@ -349,10 +400,9 @@ class Panel:
                 text, color = "○ " + pretty, "#a89ba1"
             label.configure(text=text, fg=color)
 
-        blocked = set(svcmod.blocked_ports(self.services))
+        blocked = snapshot["blocked"]
         bits = []
-        for port in svcmod.service_ports(self.services):
-            holder = util.port_holder(port)
+        for port, holder in snapshot["ports"]:
             if not holder:
                 bits.append(f"{port} 空闲")
             elif port in blocked:
@@ -374,14 +424,23 @@ class Panel:
                                 justify="left",
                                 fg="#d1802c" if blocked else "#8a7d84")
 
-    def _refresh_ssl(self) -> None:
-        """HTTPS 状态。certutil 要起子进程，所以只在 refresh() 里算，别放 2.5 秒的轮询里。"""
+    def _refresh_status(self) -> None:
+        """要立刻看到状态（比如刚启停完服务）—— 发起一轮后台采集。"""
+        self._poll_status()
+
+    def _refresh_ssl(self, force: bool = False) -> None:
+        """HTTPS 状态。certutil 要 0.2 秒，所以算一次缓存 20 秒（信任库变更要 force）。"""
         if not self.cfg["web"].get("ssl"):
             self.lbl_ssl.configure(text="HTTPS：未启用", fg="#a89ba1")
             return
         from . import ssl as sslmod
         ca = sslmod.CertAuthority(self.cfg, self.bins)
-        trusted = ca.ca_exists() and sslmod.is_trusted(ca)
+        cached = self._ssl_cache
+        if cached and not force and time.time() - cached[0] < 20:
+            trusted = cached[1]
+        else:
+            trusted = ca.ca_exists() and sslmod.is_trusted(ca)
+            self._ssl_cache = (time.time(), trusted)
         self.lbl_ssl.configure(
             text="HTTPS：已启用" + ("（证书受信任）" if trusted else "（根证书未信任）"),
             fg="#2e9e5b" if trusted else "#c98b3a",
@@ -808,6 +867,8 @@ class Panel:
         self._run("清理日志", job)
 
     def ssl_trust(self, enable: bool) -> None:
+        self._ssl_cache = None                  # 信任库变了，别拿缓存糊弄人
+
         def job():
             from . import ssl as sslmod
             ca = sslmod.CertAuthority(self.cfg, self.bins)
@@ -820,6 +881,7 @@ class Panel:
     def ssl_off(self) -> None:
         if not messagebox.askyesno("喵盒", "关掉 HTTPS？\n\n证书文件都会留着，随时能再打开。"):
             return
+        self._ssl_cache = None
 
         def job():
             from . import ssl as sslmod
@@ -832,6 +894,8 @@ class Panel:
 
     def make_ssl(self, force: bool = False) -> None:
         """一键：建 CA → 签证书 → 开 HTTPS → 装信任库 → 重启当前 Web 服务器。"""
+        self._ssl_cache = None
+
         def job():
             from . import ssl as sslmod
             lines = []
@@ -910,9 +974,45 @@ class Panel:
             return f"状态：{state}；共 {info['total']} 封、未读 {info['unread']} 封 —— {mail.ui_url()}"
         self._run("查看信箱状态", job)
 
-    def start_tray(self) -> None:
-        util.popen(runtime.launch_argv("tray"), cwd=self.lay["root"])
-        self.log("托盘已拉起（已经在跑的话它自己会退出 —— 单实例）")
+    # ------------------------------------------------------------ 托盘
+    def tray_running(self) -> bool:
+        """托盘在不在跑（查单实例互斥量，不启动也不占用它）。"""
+        from . import tray
+        try:
+            return tray.is_running()
+        except Exception:                            # noqa: BLE001
+            return False
+
+    def start_tray(self, complain: bool = True) -> bool:
+        """把托盘拉起来；已经在跑就不重复开（托盘自己是单实例）。"""
+        if self.tray_running():
+            if complain:
+                self.log("托盘已经在后台跑了（托盘只能有一个）")
+            return True
+        try:
+            util.popen(runtime.launch_argv("tray"), cwd=self.lay["root"])
+        except Exception as exc:                     # noqa: BLE001
+            self.log(f"[!!] 拉起托盘失败：{exc}")
+            return False
+        self.log("[OK] 托盘已在后台启动（关掉面板也能用托盘起停服务）")
+        return True
+
+    def ensure_tray(self) -> None:
+        """面板起来时顺手把托盘带起来。
+
+        以前只做了菜单里那个「启动系统托盘」的手动项，于是用户开了面板、
+        服务都跑着，关掉面板之后一个能点的地方都没有 —— 还得回来开面板。
+        """
+        if not (self.cfg.get("ui") or {}).get("tray_with_panel", True):
+            return
+        self.start_tray(complain=False)
+
+    def toggle_tray_with_panel(self) -> None:
+        ui = self.cfg.setdefault("ui", {})
+        ui["tray_with_panel"] = bool(self.var_tray_with_panel.get())
+        cfgmod.save(self.cfg)
+        self.log("[OK] " + ("以后开面板会一起带起托盘"
+                            if ui["tray_with_panel"] else "以后开面板不再自动带托盘"))
 
     def migrate_from_laragon(self) -> None:
         """从 Laragon 把站点文件夹和数据库搬过来（对话框里能看到要搬多少）。"""

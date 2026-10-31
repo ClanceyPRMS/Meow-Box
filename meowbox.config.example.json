@@ -30,5 +30,8 @@
     "apache",
     "mysql"
   ],
+  "ui": {
+    "tray_with_panel": true
+  },
   "openssl": null
 }

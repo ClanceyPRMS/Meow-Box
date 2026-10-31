@@ -180,6 +180,24 @@ def acquire_single_instance() -> bool:
     return True
 
 
+def is_running() -> bool:
+    """托盘在不在跑 —— 只查，不占单实例。
+
+    面板起来时要判断「要不要顺手把托盘拉起来」，靠的就是它。
+    用 `OpenMutexW` 而不是 `CreateMutexW`：后者会**顺手创建一个**，
+    检查本身就把名字占了（面板从此以为托盘一直在跑）。
+    """
+    SYNCHRONIZE = 0x00100000
+    kernel32.OpenMutexW.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.LPCWSTR]
+    kernel32.OpenMutexW.restype = wintypes.HANDLE
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    handle = kernel32.OpenMutexW(SYNCHRONIZE, False, MUTEX_NAME)
+    if not handle:
+        return False
+    kernel32.CloseHandle(handle)
+    return True
+
+
 def startup_dir() -> Path:
     return Path(os.environ.get("APPDATA", "")) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
 
