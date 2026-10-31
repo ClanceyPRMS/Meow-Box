@@ -317,7 +317,15 @@ def cmd_tld(args) -> int:
         print("\n  站点现在长这样：")
         for name in names:
             print(f"    http://{vhost.hostname_for(name, tld)}")
-    print(f"\n  别忘了同步 hosts： python meowbox.py hosts --apply   （要管理员，会整块重写成 .{tld}）")
+    print(f"\n  换完后缀还有三步，漏一步站点就打不开：")
+    print(f"    1) 同步 hosts： python meowbox.py hosts --apply   （要管理员，会整块重写成 .{tld}）")
+    if regenerated:
+        print(f"    2) 重启 Web 服务器： python meowbox.py restart web"
+              f"   （render 只改磁盘，跑着的 httpd 还是旧配置 → 所有 .{tld} 都落到默认 vhost）")
+    if cfg["web"].get("ssl"):
+        print(f"    3) 重签证书： python meowbox.py ssl              （旧证书是 .{current} 的，SNI 对不上）")
+    print(f"  另外站点自己的入库地址（WordPress 的 siteurl / MediaWiki 的 $wgServer）里还写着"
+          f" .{current}，那边会 301 跳回去，得按站点改。")
     return 0
 
 

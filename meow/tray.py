@@ -458,6 +458,8 @@ class TrayApp:
             return
         if not self._confirm("改 hosts 需要管理员权限。\n\n要现在弹出 UAC 提权去写吗？"):
             return
+        names = [vhost.hostname_for(n, self.cfg["sites"]["tld"]) for n in self._site_names()]
+        before = hostsmod.current_hostnames(hostsmod.read(hostsmod.default_path()))
         argv = runtime.console_argv("hosts", "--apply")
         rc = shell32.ShellExecuteW(None, "runas", argv[0],
                                    runtime.quote_args(argv[1:]),
@@ -465,6 +467,18 @@ class TrayApp:
         if rc <= 32:
             self._error(f"提权失败（ShellExecute 返回 {rc}）。\n\n"
                         f"可以手动用管理员终端跑： {runtime.localize('python meowbox.py hosts --apply')}")
+            return
+        # 提权进程是「另一个进程」，写完回头看一眼文件再说成功
+        self._run_async("同步 hosts ", lambda: self._await_hosts(names, before))
+
+    def _await_hosts(self, names, before, timeout: float = 60.0) -> None:
+        if hostsmod.wait_until(names, timeout=timeout) is not None:
+            self._info("hosts 已写好 ✅\n\n" + "\n".join(f"127.0.0.1  {h}" for h in names))
+            return
+        have = hostsmod.current_hostnames(hostsmod.read(hostsmod.default_path()))
+        if have == list(before):
+            raise RuntimeError("hosts 还是老样子 —— 提权那步没写成功（UAC 点了「否」？）")
+        raise RuntimeError("hosts 只改了一半：" + (", ".join(have) or "（空）"))
 
     def _do_ssl(self) -> None:
         from . import ssl as sslmod

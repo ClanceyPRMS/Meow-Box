@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 
 from .util import is_admin
@@ -103,6 +104,26 @@ def sync(hostnames, path=None, apply: bool = False, ip: str = "127.0.0.1") -> di
             fh.write(wanted.replace("\n", nl))
         result["applied"] = True
     return result
+
+
+def wait_until(hostnames, path=None, timeout: float = 60.0, interval: float = 1.0):
+    """等 hosts 里的喵盒条目变成 `hostnames`：等到就返回那些条目，超时返回 None。
+
+    为什么需要它：界面没管理员权限时是**另起一个提权进程**去写 hosts，
+    `ShellExecute` 成功只说明「UAC 弹窗发出去了」，跟写没写进去毫无关系。
+    提权进程哪怕当场报错退出（实测过：参数传错，argparse 直接退出），
+    只盯着 ShellExecute 的界面也会报成功。所以写完之后一律回头看文件。
+    """
+    path = Path(path) if path else default_path()
+    wanted = list(hostnames)
+    deadline = time.monotonic() + timeout
+    while True:
+        have = current_hostnames(read(path))
+        if have == wanted:
+            return have
+        if time.monotonic() >= deadline:
+            return None
+        time.sleep(interval)
 
 
 # --------------------------------------------------------------------------- 代理绕过

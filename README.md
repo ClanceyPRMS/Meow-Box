@@ -663,7 +663,7 @@ D:\meowbox\
 |---|---|
 | `app_root()` | 根目录：exe 模式 = **exe 所在的文件夹**；源码模式 = `meowbox.py` 所在文件夹 |
 | `templates_dir()` / `assets_dir()` | 只读资源：**根目录里有就用根目录那份**（你能改模板、换图标），没有才退回包里那份 |
-| `launch_argv()` / `console_argv()` | 再起一个自己：exe 模式直接起 `meowbox-panel.exe`，源码模式才拼 `pythonw meowbox.py` |
+| `launch_argv()` / `console_argv()` | 再起一个自己：**只有 `gui` / `tray` 走窗口版 exe**，其它子命令一律 `meowbox.exe`（控制台版，带输出、能被 UAC 提权）；源码模式才拼 `pythonw meowbox.py` |
 | `localize()` | 提示文案：exe 模式下 `python meowbox.py xxx` 自动换成 `meowbox.exe xxx` |
 | `prepare_stdio()` | 窗口版没有控制台 → `print()` 会炸；被重定向时按 UTF-8 走（否则 `🐾` 直接 `UnicodeEncodeError`） |
 
@@ -681,6 +681,31 @@ D:\meowbox\
   （Windows `WinError 5` 删不掉 `VCRUNTIME140.dll`），就留下一个**半截的包**，
   根目录的 exe 当场变砖（真踩过）。现在先检查有没有喵盒 exe 在跑，再
   `复制成 _internal.new → 老包改名 .old → 新的换上去 → 尽力删旧的`。
+- **老包改名要带时间戳**：固定叫 `_internal.old` 时，只要上一次的旧包因为被锁
+  没删掉（杀软 / 还在跑的 DLL，`rmtree(ignore_errors=True)` 会悄悄失败），
+  下一次 `rename` 就撞名 `WinError 183`，装到一半中断 —— 偏偏这时候**根目录的
+  exe 已经是新的、`_internal` 还是旧的**，两边对不上。现在叫
+  `_internal.old-20261031-174635`，并且每次 install 开头先扫一遍残留。
+
+### 提权写 hosts：ShellExecute 说成功，不等于写进去了
+
+打包版点「同步 hosts」的链路是这样的：面板没有管理员权限 → `ShellExecuteW("runas")`
+弹 UAC → 一个**提权的进程**去写文件。这里两个坑都实测踩过：
+
+1. **提权起的是哪个 exe**：`launch_argv()` 早期只给 `gui` / `tray` 指定了窗口版
+   exe，其它子命令退化成「当前 exe + 子命令」，冻结版里于是拿到
+   `meowbox-panel.exe` —— 而面板入口把自己的子命令补在最前面，
+   `meowbox-panel.exe hosts --apply` 实际变成 `gui hosts --apply`，
+   argparse 报 `unrecognized arguments: hosts --apply` 当场退出。
+   用户看到的就是：**UAC 弹了、点了「是」、窗口一闪、hosts 一个字没改**。
+   现在 `launch_argv()` 里只有 gui / tray 走窗口版，其余一律控制台版
+   `meowbox.exe`（它就是要输出、要提权的那类活儿）。
+2. **ShellExecute 的返回值什么都证明不了**：它只能说「UAC 弹窗发出去了」。
+   所以写完之后一律用 `hosts.wait_until()` 回头再看一眼文件 —— 条目真的变成
+   目标域名才报「已写好」；还是老样子就明说「提权那步没写成功（UAC 点了否？）」，
+   并把当前条目 / 目标条目一起列出来。面板和托盘都走这一条。
+   换过后缀（`.meow → .sew`）时这一条尤其重要：`hosts` 是浏览器认不认识新域名的
+   唯一依据，静默失败会让人以为「网站坏了」。
 
 ### HTTPS 体检：按故障顺序查，最后一层必须"真握手"
 

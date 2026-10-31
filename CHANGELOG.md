@@ -11,6 +11,30 @@
 
 - 站点级 rewrite 配置（现在要在 `auto.*.conf` 里手加，重新渲染就没了）
 
+## [0.2.4] - 2026-10-31
+
+「同步 hosts 真的会写了」版。
+
+### 修复
+
+- **打包版的「同步 hosts」按了没反应**（UAC 点了「是」，hosts 一个字没改）：
+  冻结后 `launch_argv()` 把子命令退化成「当前 exe + 参数」，于是提权起来的是
+  `meowbox-panel.exe`；面板入口又把 `gui` 补在最前面 →
+  `gui hosts --apply` → argparse 报 `unrecognized arguments: hosts --apply`，
+  进程当场退出，界面还照样说「已弹出 UAC」。现在只有 `gui` / `tray` 走窗口版
+  exe，其余子命令一律走控制台版 `meowbox.exe`。
+- **提权之后回头核对文件**：新增 `hosts.wait_until()`，面板和托盘在报
+  「hosts 已写好」之前，会先确认 hosts 里的条目真的变成了目标域名；
+  没变就明说「提权那步没写成功（UAC 点了否？）」并列出当前 / 目标条目。
+  以前 `ShellExecute` 一返回成功就当成了成功 —— 它只说明 UAC 弹窗发出去了。
+
+### 修复（打包）
+
+- **`build_exe.py --install` 撞名中断**：老包固定改名成 `_internal.old`，
+  上一次被锁没删干净时，下一次 `rename` 直接 `WinError 183`，
+  结果是「根目录 exe 已经是新的、`_internal` 还是旧的」。现在老包带时间戳后缀，
+  每次 install 开头先扫掉残留。
+
 ## [0.2.3] - 2026-10-28
 
 ### 改进
@@ -219,7 +243,8 @@
 - **站点级 rewrite 要手改**：写进 `auto.*.conf`，重新渲染就没了
 - **喵盒和 Laragon 不能同时跑**：抢 80 / 3306 端口
 
-[未发布]: https://github.com/ClanceyPRMS/Meow-Box/compare/v0.2.3...HEAD
+[未发布]: https://github.com/ClanceyPRMS/Meow-Box/compare/v0.2.4...HEAD
+[0.2.4]: https://github.com/ClanceyPRMS/Meow-Box/releases/tag/v0.2.4
 [0.2.3]: https://github.com/ClanceyPRMS/Meow-Box/releases/tag/v0.2.3
 [0.2.2]: https://github.com/ClanceyPRMS/Meow-Box/releases/tag/v0.2.2
 [0.2.1]: https://github.com/ClanceyPRMS/Meow-Box/releases/tag/v0.2.1

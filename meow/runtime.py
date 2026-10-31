@@ -63,13 +63,24 @@ def exe_available(root=None, name: str = CONSOLE_EXE) -> bool:
 
 
 def launch_argv(command: str, *args) -> list[str]:
-    """再起一个自己：返回完整命令行（第一个元素是可执行文件/解释器）。"""
+    """再起一个自己：返回完整命令行（第一个元素是可执行文件/解释器）。
+
+    **只有 gui / tray 走窗口版 exe**。其它都是命令行子命令，必须给控制台版
+    `meowbox.exe`：窗口版会把参数当成「启动参数」补在自己的子命令后面
+    （`meowbox-panel.exe hosts --apply` → `gui hosts --apply`），argparse 报
+    `unrecognized arguments: hosts --apply` 就退出 —— 提权写 hosts 时现象是
+    「UAC 点了是，hosts 一个字没改」。
+    """
     extra = [str(a) for a in args]
     if frozen():
         name = EXE_FOR_COMMAND.get(command)
         exe = Path(app_root()) / name if name else None
         if exe is not None and exe.is_file():
             return [str(exe), *extra]
+        if name is None:
+            console = Path(app_root()) / CONSOLE_EXE
+            if console.is_file():
+                return [str(console), command, *extra]
         # 只打包了一个 exe：同一个可执行文件加子命令
         return [sys.executable, command, *extra]
     from . import util                      # 延迟导入，免得 runtime <-> util 打结

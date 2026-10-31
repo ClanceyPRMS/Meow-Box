@@ -575,7 +575,9 @@ class Panel:
         if server is not None and server.available:
             server.render()
         self.log(f"✅ 域名后缀：.{old} → .{new}（配置已重新生成）")
-        self.log("   别忘了点「同步 hosts」让浏览器认识新域名")
+        self.log("   接下来还要：① 「同步 hosts」让浏览器认识新域名 "
+                 "② 重启服务（跑着的还是旧配置）"
+                 + ("③ 重签证书（旧证书对不上新后缀）" if self.cfg["web"].get("ssl") else ""))
         self.refresh()
 
     # ------------------------------------------------------------ hosts / 端口
@@ -593,12 +595,16 @@ class Panel:
                     "喵盒", "改 hosts 需要管理员权限。\n\n"
                             "要现在弹 UAC 提权去写吗？（点「是」后请在系统弹窗里选「是」）"):
                 return
+            before = hostsmod.current_hostnames(hostsmod.read(hostsmod.default_path()))
             argv = runtime.console_argv("hosts", "--apply")
-            if util.shell_execute_elevated(argv[0], runtime.quote_args(argv[1:]),
-                                           str(self.lay["root"])):
-                self.log("已弹出 UAC：在系统窗口里点「是」，hosts 就会写好")
-            else:
+            if not util.shell_execute_elevated(argv[0], runtime.quote_args(argv[1:]),
+                                               str(self.lay["root"])):
                 messagebox.showerror("喵盒", "提权失败（UAC 被取消了？）")
+                return
+            self.log("已弹出 UAC：在系统窗口里点「是」，hosts 就会写好")
+            # ShellExecute 只说明「弹窗发出去了」。写没写进去要自己回头看 ——
+            # 不然提权进程当场失败时，界面照样报成功（就是这个坑）。
+            self._run("同步 hosts（提权）", lambda: self._await_hosts(names, before))
             return
 
         def job():
@@ -616,6 +622,20 @@ class Panel:
                 return "主机条目已经是最新的" + extra
             return "已写入 " + ", ".join(names) + extra
         self._run("同步 hosts", job)
+
+    def _await_hosts(self, names, before, timeout: float = 60.0) -> str:
+        """提权进程写 hosts 是「另一个进程」，等文件真的变了再回话。"""
+        if hostsmod.wait_until(names, timeout=timeout) is not None:
+            shown = ", ".join(names[:3]) + (f" 等 {len(names)} 个" if len(names) > 3 else "")
+            return f"✅ hosts 已写好：{shown}"
+        have = hostsmod.current_hostnames(hostsmod.read(hostsmod.default_path()))
+        if have == list(before):
+            raise RuntimeError(
+                "hosts 还是老样子 —— 提权那步没写成功（UAC 点了「否」？）。\n"
+                f"当前：{', '.join(have) or '（没有喵盒条目）'}\n"
+                f"应该：{', '.join(names) or '（没有站点）'}"
+            )
+        raise RuntimeError("hosts 只改了一半：" + (", ".join(have) or "（空）"))
 
     def open_hosts_file(self) -> None:
         """用「管理员记事本」打开 hosts —— 不然改了存不进去。"""

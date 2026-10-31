@@ -111,7 +111,10 @@ def install() -> None:
 
     src_dir = DIST / "_internal"
     new_dir = ROOT / "_internal.new"
-    old_dir = ROOT / "_internal.old"
+    #: 老包的名字必须**唯一**：上次要是被锁（杀软 / 还在跑的 dll）留下了
+    #: `_internal.old`，直接 rename 过来就是 WinError 183，装到一半就断。
+    old_dir = ROOT / f"_internal.old-{time.strftime('%Y%m%d-%H%M%S')}"
+    _sweep_leftovers()
     if new_dir.exists():
         shutil.rmtree(new_dir, ignore_errors=True)
     shutil.copytree(src_dir, new_dir)
@@ -119,14 +122,24 @@ def install() -> None:
 
     dst = ROOT / "_internal"
     if dst.exists():
-        if old_dir.exists():
-            shutil.rmtree(old_dir, ignore_errors=True)
-        dst.rename(old_dir)                       # 老包先挪开（还删不掉就留着）
+        dst.rename(old_dir)                       # 老包先挪开，别删（删一半就变砖）
     new_dir.rename(dst)
-    shutil.rmtree(old_dir, ignore_errors=True)
+    try:
+        shutil.rmtree(old_dir)
+    except OSError as exc:                        # 被锁的 dll：留着，下次再扫
+        print(f"  ⚠️ 旧包没删干净（{exc.__class__.__name__}）：{old_dir.name}，下次打包会自动再试")
     print(f"  ✅ _internal/（{human(size)}）")
     print("\n  现在双击 meowbox-panel.exe / meowbox-tray.exe 就能用，不用装 Python。")
     print("  旧的双击启动器（.vbs）跑一次 `meowbox.exe shortcut` 就会改成指向 exe。")
+
+
+def _sweep_leftovers() -> None:
+    """清掉上次打包留下的 `_internal.old*`（删不掉就留着，不报错）。"""
+    for path in sorted(ROOT.glob("_internal.old*")):
+        try:
+            shutil.rmtree(path)
+        except OSError:
+            print(f"  · {path.name} 还被锁着，先留着")
 
 
 def main(argv=None) -> int:
