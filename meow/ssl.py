@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 
 from . import config as cfgmod
+from . import plat
 from .util import ensure_dir, fwd, run
 
 CA_CN = "Meow Box Local CA"
@@ -53,16 +54,25 @@ def _candidates(cfg: dict, bins: dict) -> list[Path]:
     if cfg.get("openssl"):
         out.append(Path(cfg["openssl"]))
     base = cfgmod.binary_root(cfg)
-    out += [
-        base / "bin" / "laragon" / "utils" / "openssl" / "openssl.exe",   # Laragon 自带
-        base / "bin" / "openssl" / "openssl.exe",                          # 喵盒自己下的
-        Path(r"C:\Program Files\Git\usr\bin\openssl.exe"),
-        Path(r"C:\Program Files\Git\mingw64\bin\openssl.exe"),
-    ]
+    if plat.IS_WINDOWS:
+        out += [
+            base / "bin" / "laragon" / "utils" / "openssl" / "openssl.exe",   # Laragon 自带
+            base / "bin" / "openssl" / "openssl.exe",                          # 喵盒自己下的
+            Path(r"C:\Program Files\Git\usr\bin\openssl.exe"),
+            Path(r"C:\Program Files\Git\mingw64\bin\openssl.exe"),
+        ]
+    else:
+        import shutil
+        found = shutil.which("openssl")
+        if found:
+            out.append(Path(found))
+        out += [base / "bin" / "openssl" / "openssl",   # 喵盒自己下的
+                Path("/usr/sbin/openssl"), Path("/usr/bin/openssl"),
+                Path("/usr/local/bin/openssl")]
     if bins.get("apache"):
         apache = Path(bins["apache"])
-        out.append(apache / "bin" / "openssl.exe")
-        out += sorted(apache.glob("bin/openssl.exe"))
+        out.append(apache / "bin" / f"openssl{plat.EXE}")
+        out += sorted(apache.glob(f"bin/openssl{plat.EXE}"))
     return out
 
 
@@ -229,10 +239,50 @@ class CertAuthority:
 
 
 # ------------------------------------------------------------------ 信任库
+#: Chromium / Chrome 在 Linux 上用 NSS 数据库
+NSS_DB = Path.home() / ".pki" / "nssdb"
+#: Firefox 每个 profile 一个 cert9.db
+FIREFOX_ROOT = Path.home() / ".mozilla" / "firefox"
+
+
+def _certutil() -> str | None:
+    import shutil
+    return shutil.which("certutil") or ("/usr/sbin/certutil"
+                                        if Path("/usr/sbin/certutil").is_file() else None)
+
+
+def _nss_dbs() -> list[Path]:
+    """所有该装根证书的 NSS 库：Chromium 的 + 每个 Firefox profile。"""
+    out: list[Path] = []
+    if NSS_DB.is_dir():
+        out.append(NSS_DB)
+    if FIREFOX_ROOT.is_dir():
+        for profile in sorted(FIREFOX_ROOT.iterdir()):
+            if (profile / "cert9.db").is_file():
+                out.append(profile)
+    return out
+
+
+def _linux_anchors_dir() -> Path:
+    """p11-kit 的用户级 CA 目录（给 curl / GTK / Java 这类用）。"""
+    base = Path(os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config"))
+    return base / "pki" / "ca-trust" / "source" / "anchors"
+
+
 def is_trusted(ca: CertAuthority) -> bool:
     """根证书在不在当前用户的信任库里。"""
     if not ca.ca_exists():
         return False
+    if not plat.IS_WINDOWS:
+        certutil = _certutil()
+        if not certutil:
+            return False
+        for db in _nss_dbs():
+            rc, out, err = run([certutil, "-d", f"sql:{db}", "-L", "-n", CA_CN], timeout=30)
+            if rc == 0:
+                return True
+        return False
+
     rc, out, err = run(["certutil", "-store", "-user", "Root", CA_CN], timeout=30)
     text = ((out or "") + (err or "")).upper()
     thumb = ca.thumbprint()
@@ -242,22 +292,83 @@ def is_trusted(ca: CertAuthority) -> bool:
 
 
 def trust_ca(ca: CertAuthority) -> tuple[bool, str]:
-    """把根证书装进当前用户的 Root 信任库（不需要管理员）。"""
+    """把根证书装进**当前用户**的信任库（两个平台都不需要管理员）。
+
+    * **Windows**：`certutil -addstore -user Root`；
+    * **Linux**：装进所有 NSS 库（Chromium 的 `~/.pki/nssdb` + 每个 Firefox
+      profile 的 `cert9.db`），另外往 p11-kit 的用户级 anchors 放一份，
+      让 curl / GTK 这类也认。
+    """
     if not ca.ca_exists():
         return False, "还没有根证书"
-    rc, out, err = run(["certutil", "-addstore", "-user", "Root", str(ca.ca_crt)], timeout=60)
-    if rc != 0:
-        return False, ((err or out).strip() or f"certutil 返回 {rc}")[-600:]
-    return True, "已装进当前用户的信任库"
+
+    if plat.IS_WINDOWS:
+        rc, out, err = run(["certutil", "-addstore", "-user", "Root", str(ca.ca_crt)],
+                           timeout=60)
+        if rc != 0:
+            return False, ((err or out).strip() or f"certutil 返回 {rc}")[-600:]
+        return True, "已装进当前用户的信任库"
+
+    certutil = _certutil()
+    installed: list[str] = []
+    failed: list[str] = []
+
+    # ① NSS（浏览器真正看的地方）
+    if certutil:
+        for db in _nss_dbs():
+            # 先删再装，免得同一份证书重复进来（certutil -A 会报 already exists）
+            run([certutil, "-d", f"sql:{db}", "-D", "-n", CA_CN], timeout=30)
+            rc, out, err = run([certutil, "-d", f"sql:{db}", "-A", "-t", "C,,",
+                                "-n", CA_CN, "-i", str(ca.ca_crt)], timeout=60)
+            if rc == 0:
+                installed.append(str(db))
+            else:
+                failed.append(f"{db}: {(err or out).strip()[:200]}")
+    else:
+        failed.append("没装 certutil（nss 包）—— 浏览器不会认这张证书")
+
+    # ② p11-kit 用户级 anchor（curl / GTK / Java）
+    try:
+        anchors = _linux_anchors_dir()
+        ensure_dir(anchors)
+        dest = anchors / "meowbox-ca.crt"
+        dest.write_bytes(ca.ca_crt.read_bytes())
+        installed.append(str(dest))
+    except OSError as exc:
+        failed.append(f"p11-kit anchors: {exc}")
+
+    if installed:
+        message = "已装进：" + "、".join(installed)
+        if failed:
+            message += "\n（有几步没成：" + "; ".join(failed) + "）"
+        return True, message
+    return False, "\n".join(failed) or "没有可用的信任库"
 
 
 def untrust_ca(ca: CertAuthority) -> tuple[bool, str]:
     if not ca.ca_exists():
         return False, "还没有根证书"
-    rc, out, err = run(["certutil", "-delstore", "-user", "Root", CA_CN], timeout=60)
-    if rc != 0:
-        return False, ((err or out).strip() or f"certutil 返回 {rc}")[-600:]
-    return True, "已从信任库移除"
+
+    if plat.IS_WINDOWS:
+        rc, out, err = run(["certutil", "-delstore", "-user", "Root", CA_CN], timeout=60)
+        if rc != 0:
+            return False, ((err or out).strip() or f"certutil 返回 {rc}")[-600:]
+        return True, "已从信任库移除"
+
+    certutil = _certutil()
+    done: list[str] = []
+    if certutil:
+        for db in _nss_dbs():
+            rc, _, _ = run([certutil, "-d", f"sql:{db}", "-D", "-n", CA_CN], timeout=30)
+            if rc == 0:
+                done.append(str(db))
+    anchor = _linux_anchors_dir() / "meowbox-ca.crt"
+    if anchor.is_file():
+        anchor.unlink(missing_ok=True)
+        done.append(str(anchor))
+    if not done:
+        return False, "信任库里没找到这张证书"
+    return True, "已从这些地方移除：" + "、".join(done)
 
 
 # ------------------------------------------------------------------ 一键

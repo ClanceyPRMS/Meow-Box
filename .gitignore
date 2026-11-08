@@ -16,7 +16,12 @@ run/
 dist/
 build/
 _internal/
+_internal.old-*/
 *.exe
+
+# ── 下载缓存 + 迁移时的临时包 ───────────────────────────────
+cache/
+btexport-databases.tar.gz
 
 # ── 本机实例配置 ───────────────────────────────────────────
 # 各自跑 `python meowbox.py init` 生成；仓库里只放 example 供参考

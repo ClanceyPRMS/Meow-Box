@@ -14,18 +14,21 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from . import plat
 from .util import ensure_dir, fwd
 
 CONFIG_NAME = "meowbox.config.json"
 
 #: 在 bin/ 下面按"一个容器目录里套一个版本目录"的惯例找二进制
+#: （**只对 Windows / 自带二进制有意义**；Linux 上系统包的路径由
+#: `plat.apache()` 这类解析器算，见 meow/plat.py）
 BIN_LAYOUT = {
     # Apache Lounge 的布局：版本目录下还有一层 bin/ 放 httpd.exe
-    "apache": ("bin/apache", "bin/httpd.exe"),
-    "php": ("bin/php", "php.exe"),
-    "mysql": ("bin/mysql", "bin/mysqld.exe"),
-    "nginx": ("bin/nginx", "nginx.exe"),
-    "mailpit": ("bin/mailpit", "mailpit.exe"),
+    "apache": ("bin/apache", f"bin/httpd{plat.EXE}"),
+    "php": ("bin/php", f"php{plat.EXE}"),
+    "mysql": ("bin/mysql", f"bin/mysqld{plat.EXE}"),
+    "nginx": ("bin/nginx", f"nginx{plat.EXE}"),
+    "mailpit": ("bin/mailpit", f"mailpit{plat.EXE}"),
 }
 
 
@@ -53,12 +56,15 @@ def _relative_to_root(path, root) -> str | None:
 
 
 def default_config(root: Path, provider: Path | None = None) -> dict:
+    ports = plat.default_ports()
     return {
         # 永远写 "." —— 意思是"就是配置文件所在的这个文件夹"
         "root": ".",
         "provider": fwd(provider) if provider else None,
         # web.server 决定喵盒看管哪一个 Web 服务器：apache / nginx（同时只跑一个）
-        "web": {"server": "apache", "http_port": 80, "https_port": 443, "ssl": False},
+        # Linux 上低于 1024 的端口要 CAP_NET_BIND_SERVICE，所以默认先用 8080/8443
+        "web": {"server": "apache", "http_port": ports["http"],
+                "https_port": ports["https"], "ssl": False},
         # nginx 自己不跑 PHP，要靠 php-cgi 的 FastCGI 端口
         # version = 默认 PHP 版本（8.5 这种标签）；站点可以在 sites.php 里单独指定
         # cgi_children = 每个版本起几个 php-cgi worker（1 个的话一个慢请求会堵死整池）
@@ -76,11 +82,15 @@ def default_config(root: Path, provider: Path | None = None) -> dict:
 
 
 def normalize(cfg: dict) -> dict:
-    """把老配置文件缺的键补上（改结构时别把人家的配置弄坏）。"""
+    """把老配置文件缺的键补上（改结构时别把人家的配置弄坏）。
+
+    **端口不补默认值**：老配置里已经写死了 80/443，补成 8080 会把
+    Windows 那边的站点全搞挂。只有 `default_config()` 给新装实例用平台默认值。
+    """
     cfg.setdefault("web", {})
     cfg["web"].setdefault("server", "apache")
-    cfg["web"].setdefault("http_port", 80)
-    cfg["web"].setdefault("https_port", 443)
+    cfg["web"].setdefault("http_port", 80 if plat.IS_WINDOWS else 8080)
+    cfg["web"].setdefault("https_port", 443 if plat.IS_WINDOWS else 8443)
     cfg["web"].setdefault("ssl", False)
     cfg.setdefault("php", {})
     cfg["php"].setdefault("fastcgi_port", 9000)
@@ -148,13 +158,7 @@ def raw_config(root: Path) -> dict:
 
 def _find_version_dir(base: Path, exe_rel: str) -> Path | None:
     """在 bin/apache/ 这种容器目录里找出真正含 exe 的那一层。"""
-    if not base.is_dir():
-        return None
-    candidates = [base] + sorted([d for d in base.iterdir() if d.is_dir()], reverse=True)
-    for cand in candidates:
-        if (cand / exe_rel).is_file():
-            return cand
-    return None
+    return plat._find_version_dir(base, exe_rel)
 
 
 def binary_root(cfg: dict) -> Path:
@@ -165,24 +169,41 @@ def binary_root(cfg: dict) -> Path:
 
 
 def discover(cfg: dict) -> dict:
-    """探测每个组件的安装目录（绝对路径），没找到的返回 None。"""
-    base = binary_root(cfg)
-    found: dict[str, Path | None] = {}
-    for name, (sub, exe) in BIN_LAYOUT.items():
-        found[name] = _find_version_dir(base / sub, exe)
+    """探测每个组件的安装位置，没找到的返回 None。
+
+    返回的是 `plat.Paths`（有 `.exe` / `.root` / `.modules` / `.dir`），
+    不是裸目录 —— 这样 Windows 的 `bin/apache/<版本>/bin/httpd.exe`
+    和 Arch 的 `/usr/bin/httpd` 能装进同一个字段。
+    老代码里的 `Path(bins["apache"])` 拿到的是组件 root（见 `Paths.__fspath__`）。
+    """
+    found: dict = {}
+    for name, resolver in plat.RESOLVERS.items():
+        try:
+            found[name] = resolver(cfg)
+        except Exception:                          # noqa: BLE001 —— 探测失败当没装
+            found[name] = None
     # PHP 可能装了好几个版本：别按目录名倒序随便挑一个，
     # 要跟「默认版本」保持一致，否则面板显示的路径和实际挂载的不是同一个。
-    found["php"] = _default_php_dir(cfg, found.get("php"))
+    try:
+        found["php"] = _default_php(cfg, found.get("php"))
+    except Exception:                              # noqa: BLE001
+        pass
     return found
 
 
-def _default_php_dir(cfg: dict, fallback):
+def paths(cfg: dict, name: str):
+    """单独问一个组件在哪（不想跑全量 discover 时用）。"""
+    resolver = plat.RESOLVERS.get(name)
+    return resolver(cfg) if resolver else None
+
+
+def _default_php(cfg: dict, fallback=None):
     try:
         from . import php as phpmod
         versions = phpmod.scan(cfg)
         label = phpmod.default_label(cfg, versions)
         if label:
-            return versions[label].dir
+            return versions[label]
     except Exception:                              # noqa: BLE001 —— 探测失败就用旧的
         pass
     return fallback

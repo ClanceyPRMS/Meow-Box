@@ -77,9 +77,24 @@ def site_url(cfg: dict, lay: dict, name: str) -> str:
     return f"http://{host}"
 
 
+def fcgi_target(port: int) -> str:
+    """`SetHandler` 里那个 FastCGI 地址 —— **两个平台的结尾不一样**。
+
+    * **Windows**：`proxy:fcgi://127.0.0.1:9000/`（**必须带斜杠**）。
+      少了它 Apache 把请求路径直接拼上去变成 `fcgi://127.0.0.1:9000D:/…`，
+      于是去解析「主机 9000d」并报 DNS lookup failure。
+    * **Linux**：`proxy:fcgi://127.0.0.1:9000`（**不能带斜杠**）。
+      带了斜杠，mod_proxy_fcgi 会把 `/home/…` 当成 URL 路径拼上去，
+      变成 `//home/…`，php-cgi 只回一句 `No input file specified.`
+    """
+    from . import plat
+    suffix = "/" if plat.IS_WINDOWS else ""
+    return f"proxy:fcgi://127.0.0.1:{port}{suffix}"
+
+
 def php_block(port: int | None, label: str | None = None,
               default_label: str | None = None, docroot: str = "") -> str:
-    """Apache 里让这个站点走 FastCGI 的那一段；默认版本（mod_php）返回空串。
+    """Apache 里让这个站点走 FastCGI 的那一段；Windows 上默认版本（mod_php）返回空串。
 
     两个 Windows 专属的坑（都实测踩过）：
     * `SetHandler proxy:fcgi://127.0.0.1:9001` 少了结尾的 `/`，Apache 会把
@@ -87,23 +102,32 @@ def php_block(port: int | None, label: str | None = None,
       「主机 9001d」并报 DNS lookup failure —— 所以结尾的斜杠**必须有**。
     * 别改成 ProxyPassMatch：那样 r->filename 变成代理地址，SCRIPT_FILENAME
       就丢了，php-cgi 只回一句 No input file specified。
+    * Windows 上 mod_proxy_fcgi 还会把 SCRIPT_FILENAME 前面加一个 `/` 变成
+      `/D:/…`，所以要 `ProxyFCGISetEnvIf` 自己拼一份对的。**Linux 上不需要
+      这一行**（路径本来就是对的），加了反而多一层没意义的覆盖。
     """
+    from . import plat
     if not port:
         return ""
     hint = f"PHP {label}" if label else "PHP"
     if default_label:
-        hint += f"（默认版本 {default_label} 走 mod_php，这里走 php-cgi）"
-    return (
+        if plat.IS_WINDOWS:
+            hint += f"（默认版本 {default_label} 走 mod_php，这里走 php-cgi）"
+        else:
+            hint += f"（默认版本 {default_label}，Linux 上也走 php-cgi）"
+    block = (
         f"    # {hint} —— FastCGI\n"
         f'    <FilesMatch "\\.php$">\n'
-        f'        SetHandler "proxy:fcgi://127.0.0.1:{port}/"\n'
+        f'        SetHandler "{fcgi_target(port)}"\n'
         f"    </FilesMatch>\n"
-        # mod_proxy_fcgi 在 Windows 上会把 SCRIPT_FILENAME 前面加一个 `/`，
-        # 变成 `/D:/…`（Windows 上不是合法绝对路径）→ php-cgi 只回
-        # "No input file specified"。用 DOCUMENT_ROOT + SCRIPT_NAME 自己拼一份对的。
+        # SCRIPT_FILENAME 显式拼一份：DOCUMENT_ROOT + SCRIPT_NAME。
+        # Windows 上不拼会拿到 `/D:/…`（不合法绝对路径）；Linux 上
+        # mod_proxy_fcgi 传的默认值也不可靠（实测拿到空/相对路径，
+        # php-cgi 只回一句「No input file specified」）。两个平台都写最省事。
         f'    ProxyFCGISetEnvIf "true" SCRIPT_FILENAME '
         f'"%{{reqenv:DOCUMENT_ROOT}}%{{reqenv:SCRIPT_NAME}}"\n'
     )
+    return block
 
 
 def _template(templates_dir, filename: str, fallback: str) -> str:

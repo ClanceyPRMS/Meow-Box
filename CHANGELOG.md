@@ -11,6 +11,66 @@
 
 - 站点级 rewrite 配置（现在要在 `auto.*.conf` 里手加，重新渲染就没了）
 
+## [0.3.0] - 2026-11-08
+
+「跑得了 Arch 了」版 —— 第一次走出 Windows。
+
+### 新增
+
+- **Linux 支持（先在 Arch 上验证）**。同一套代码、同一份配置格式，Windows 那边
+  的行为一个字没改。核心是新增 `meow/plat.py`：进程名/端口扫描/进程树/提权/
+  组件路径解析全收在这一个文件里，业务模块不再出现 `os.name == "nt"` 和
+  `bin/httpd.exe` 这种硬编码。
+- **组件来源自动探测**：`provider` 留空时，先找 `bin/<组件>/`（自带），
+  找不到就用系统包（Arch 的 `/usr/bin/httpd`、`/usr/lib/httpd/modules`、
+  `/etc/httpd/conf/mime.types`）。`plat.Paths` 把这两套布局装进同一个字段。
+- **`meowbox.py cap on|off|check`**：Linux 上低于 1024 的端口要
+  `CAP_NET_BIND_SERVICE`。用 `setcap` 给二进制最小能力，而不是让服务以 root 跑。
+- **Linux 的端口默认 8080/8443**：新装实例不跟 Windows 抢 80/443。
+- **`.desktop` 启动器 + XDG 开机自启**：`shortcut` 在 Linux 上生成
+  `meowbox-panel.desktop`，`autostart on` 写 `~/.config/autostart/`（不碰 systemd）。
+
+### 改法（为什么非得这么改）
+
+- **Arch 的 `php` 包没有 mod_php**（`libphp.so` 在 AUR 的 `php-apache` 里）。
+  所以 Linux 上 Apache 也全员走 `php-cgi` + `mod_proxy_fcgi`，
+  `CgiPool.labels_for()` 按 `_default_runs_as_module()` 判断，不再假设
+  「默认版本一定挂模块」。
+- **Linux 上 httpd / nginx 默认会 fork 到后台然后父进程退出** —— 不加
+  `-DFOREGROUND`（Apache）/ `-g "daemon off;"`（Nginx），`popen()` 记下的 pid
+  当场就死，面板永远显示「已停止」。
+- **`SetHandler` 的结尾斜杠两个平台相反**：Windows 必须带（否则 `9000D:/…`
+  被当成主机名），Linux 必须不带（带了会拼成 `//home/…`，php-cgi 只回
+  `No input file specified`）。见 `vhost.fcgi_target()`。
+- **`ProxyFCGISetEnvIf` 两个平台都要写**：Linux 上 mod_proxy_fcgi 传的
+  `SCRIPT_FILENAME` 也不可靠，显式拼 `DOCUMENT_ROOT + SCRIPT_NAME` 最省心。
+- **`Mutex` 语法**：是 `机制:目录`（`Mutex default:/path`），写成
+  `Mutex file:"目录" default` 会报 `Invalid Mutex directory`。
+  另外 `DefaultRuntimeDir` + `ScoreBoardFile` 必须指到喵盒的 `run/`，
+  否则 Apache 往 `ServerRoot/logs` 写然后起不来。
+- **Arch 的 `/etc/php/conf.d` 是空的**：`.so` 都装了但一个不启用，所以
+  `mysqli` / `pdo_mysql` 默认没有。喵盒不改系统 `php.ini`，而是在自己的
+  `etc/php/conf.d/meowbox.ini` 里写要启用的扩展，再用
+  `PHP_INI_SCAN_DIR=/etc/php/conf.d:<喵盒>/conf.d` 把两个目录串起来。
+- **MariaDB 不认识 `--initialize-insecure`**：Linux 上改用
+  `mariadb-install-db`，并且必须带
+  `--auth-root-authentication-method=normal`（默认的 `unix_socket` 认证
+  会让站点和 phpMyAdmin 连不上）。socket / pid 也落进喵盒的 `run/`。
+- **hosts 靠 `pkexec`**：Linux 的 `/etc/hosts` 是 root 的。`hosts.sync()`
+  会先把新内容落到 `$TMPDIR/meowbox-hosts.new`，再 `pkexec cp`；认证框弹不出来
+  （没有 polkit agent）时直接把那条 `sudo cp` 命令打给用户。
+- **SSL 信任库是 NSS**：Windows 是 `certutil -addstore -user Root`；
+  Linux 要装进 `~/.pki/nssdb`（Chromium/Chrome）和每个 Firefox profile 的
+  `cert9.db`，另外往 p11-kit 的用户级 anchors 放一份给 curl/GTK 用。
+- **托盘是 Windows 限定**（Win32 `Shell_NotifyIcon`），Linux 上直接说明并用面板。
+
+### 已知限制（Linux）
+
+- 没有托盘；用面板或者 `.desktop`。
+- `migrate`（Laragon 迁移）和 `vendor`（复制 bin/）是 Windows 专用，Linux 上会
+  说清楚并退出。
+- 系统 PHP 只有一个版本（发行版的），站点级多版本要自己往 `bin/php/` 里解包。
+
 ## [0.2.5] - 2026-10-31
 
 「面板不卡了，托盘也不再要手点」版。

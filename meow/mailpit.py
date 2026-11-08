@@ -17,7 +17,7 @@ import urllib.request
 from pathlib import Path
 
 from . import config as cfgmod
-from . import util
+from . import plat, util
 from .util import ensure_dir, fwd, kill_tree, popen, run
 
 
@@ -27,16 +27,17 @@ class Mailpit:
     def __init__(self, cfg: dict, bins: dict):
         self.cfg = cfg
         self.lay = cfgmod.layout(cfg)
-        self.dir = Path(bins["mailpit"]) if bins.get("mailpit") else None
+        self.paths = plat.as_paths("mailpit", (bins or {}).get("mailpit"), cfg)
+        self.dir = self.paths.root if self.paths else None
 
     # ---------- 路径 ----------
     @property
     def available(self) -> bool:
-        return self.dir is not None and (self.dir / "mailpit.exe").is_file()
+        return self.paths is not None and self.paths.exe.is_file()
 
     @property
     def exe(self) -> Path:
-        return self.dir / "mailpit.exe"
+        return self.paths.exe
 
     @property
     def data_dir(self) -> Path:
@@ -122,7 +123,11 @@ class Mailpit:
 
     def start(self) -> int:
         if not self.available:
-            raise RuntimeError("没找到 Mailpit，请先 python meowbox.py pkg install mailpit")
+            raise RuntimeError(
+                "没找到 Mailpit。\n"
+                + ("Arch 上没有官方包：python meowbox.py pkg install mailpit 自己下"
+                   if not plat.IS_WINDOWS
+                   else "先 python meowbox.py pkg install mailpit"))
         if self.running():
             return self._pid()
         for port in self.ports:

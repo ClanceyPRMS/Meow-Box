@@ -2,16 +2,15 @@
 
 跟 Apache 那套不一样的地方（都是实测出来的）：
 
-* Nginx 自己不跑 PHP：必须另起一个 `php-cgi.exe -b 127.0.0.1:端口` 的
+* Nginx 自己不跑 PHP：必须另起一个 `php-cgi -b 127.0.0.1:端口` 的
   FastCGI 进程，站点里的 `.php` 请求全转给它。这个进程由喵盒一并看管。
 * 主配置用 `-c` 指过去，`-p` 把 prefix 指到喵盒根目录 —— 不这么指，
-  Windows 版 Nginx 会把默认的粗活目录（temp/、logs/）写进
-  `D:\\laragon\\bin\\nginx\\<版本>\\` 里，脏了别人的安装目录。
+  Nginx 会把默认的粗活目录（temp/、logs/）写进它自己的安装目录，
+  脏了别人的环境。
 * 重载/优雅停止不是命令行里按 Ctrl+C，而是 `nginx -s reload|quit`，
   它靠配置里 `pid` 指向的那个文件找主进程。
-* Nginx 的主进程在 Windows 上是**我们 popen 起来的那个进程本身**，
-  所以 pid 文件里记的就是主进程号；它自己还会写一份 `nginx-master.pid`，
-  两份都在 `run/` 下，谁丢了都能互相兜底。
+* **Linux 上 Nginx 默认 daemon on**（fork 到后台然后父进程退出），
+  所以启动时必须补 `-g "daemon off;"`，否则 `popen()` 记的 pid 立刻失效。
 """
 from __future__ import annotations
 
@@ -20,7 +19,7 @@ from pathlib import Path
 
 from . import config as cfgmod
 from . import php as phpmod
-from . import util, vhost
+from . import plat, util, vhost
 from .util import ensure_dir, fwd, kill_tree, popen, run
 
 
@@ -61,7 +60,8 @@ class Nginx:
         self.cfg = cfg
         self.bins = bins
         self.lay = cfgmod.layout(cfg)
-        self.dir = Path(bins["nginx"]) if bins.get("nginx") else None
+        self.paths = plat.as_paths("nginx", (bins or {}).get("nginx"), cfg)
+        self.dir = self.paths.root if self.paths else None
 
         # Nginx 没有 mod_php：每个 PHP 版本一个 php-cgi 端口
         self.php_versions = phpmod.scan(cfg)
@@ -75,11 +75,11 @@ class Nginx:
     # ---------- 路径 ----------
     @property
     def available(self) -> bool:
-        return self.dir is not None and (self.dir / "nginx.exe").is_file()
+        return self.paths is not None and self.paths.exe.is_file()
 
     @property
     def exe(self) -> Path:
-        return self.dir / "nginx.exe"
+        return self.paths.exe
 
     @property
     def prefix(self) -> Path:
@@ -104,6 +104,13 @@ class Nginx:
 
     @property
     def mime_types(self) -> Path:
+        """mime.types 用 Nginx 自带的那份。
+
+        Windows：`<版本目录>/conf/mime.types`；
+        Arch：`/etc/nginx/mime.types`（探测不到就退回那一份）。
+        """
+        if self.paths is not None and self.paths.mime_types is not None:
+            return self.paths.mime_types
         return self.dir / "conf" / "mime.types"
 
     @property
@@ -124,7 +131,7 @@ class Nginx:
     def php_exe(self) -> Path | None:
         if not self.php_dir:
             return None
-        return self.php_dir / "php-cgi.exe"
+        return self.php_dir / f"php-cgi{plat.EXE}"
 
     @property
     def php_ini(self) -> Path | None:
@@ -227,7 +234,18 @@ class Nginx:
 
     # ---------- 命令 ----------
     def _argv(self, *extra) -> list[str]:
-        return [str(self.exe), *extra, "-p", fwd(self.prefix) + "/", "-c", fwd(self.conf)]
+        """拼 nginx 的命令行。
+
+        * `-p <喵盒> -c <conf>`：粗活目录全落喵盒里，不碰别人；
+        * **Linux 上补 `-g "daemon off;"`** —— 默认 daemon on 会 fork 到
+          后台然后父进程退出，`popen()` 记下的 pid 当场失效，
+          面板上的状态就永远是「已停止」。
+        """
+        args = [str(self.exe), *extra]
+        if not plat.IS_WINDOWS:
+            args += ["-g", "daemon off;"]
+        args += ["-p", fwd(self.prefix) + "/", "-c", fwd(self.conf)]
+        return args
 
     def test(self):
         """让 Nginx 自己检查配置语法（输出走 stderr）。"""

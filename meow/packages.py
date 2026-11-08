@@ -2,16 +2,20 @@
 
 和 Laragon 的 usr/packages.conf 同一个思路——一行一个 `名字=下载地址`，
 喵盒照着下、解压到 bin/ 下面。
+
+**Linux 上这份清单只有 Mailpit 有用**：Apache / Nginx / PHP / MariaDB 全走
+发行版的包管理器（`pacman -S`），让喵盒再去下一份自己维护的二进制是给自己
+找麻烦（glibc 版本、依赖库、安全更新都得自己跟）。
 """
 from __future__ import annotations
 
 import shutil
 from pathlib import Path
 
-from . import download
+from . import download, plat
 from .util import ensure_dir, fwd, run
 
-DEFAULT_MENU = """# 喵盒软件清单：名字=下载地址
+DEFAULT_MENU_WINDOWS = """# 喵盒软件清单：名字=下载地址
 # 一行一个；`---` 用来分组；# 开头是注释。
 #
 # ⚠️ 名字就是装到 bin/ 下面的目录名，喵盒靠它找程序 —— 别乱改：
@@ -43,6 +47,35 @@ mailpit=https://github.com/axllent/mailpit/releases/download/v1.22.3/mailpit-win
 node-24.12=https://nodejs.org/dist/v24.12.0/node-v24.12.0-win-x64.zip
 """
 
+DEFAULT_MENU_LINUX = """# 喵盒软件清单（Linux）
+#
+# Apache / Nginx / PHP / MariaDB 在 Linux 上**不从这里下** —— 直接用发行版的包：
+#
+#     sudo pacman -S apache nginx php php-cgi mariadb
+#     # Debian/Ubuntu： sudo apt install apache2 nginx php php-cgi mariadb-server
+#
+# 为什么要这样：这些程序在系统里还得有匹配的依赖库和 glibc，自己下一份
+# 二进制迟早会跟系统打架；而发行版的包管理器会给安全更新。喵盒只负责
+# 「配置 + 进程看管 + hosts + HTTPS」，程序本身交给系统。
+#
+# 下面这份清单只剩「官方仓库里没有」的东西。
+
+# 邮件测试（Mailpit：Arch 官方仓库没有，喵盒下静态二进制）
+mailpit=https://github.com/axllent/mailpit/releases/download/v1.22.3/mailpit-linux-amd64.tar.gz
+"""
+
+#: 这些组件在 Linux 上应该用系统包管理器，不要从 packages.conf 下
+SYSTEM_PACKAGES = {
+    "apache": "apache",
+    "nginx": "nginx",
+    "php": "php php-cgi",
+    "mysql": "mariadb",
+}
+
+
+def default_menu() -> str:
+    return DEFAULT_MENU_WINDOWS if plat.IS_WINDOWS else DEFAULT_MENU_LINUX
+
 
 def menu_path(cfg: dict) -> Path:
     return Path(cfg["root"]) / "packages.conf"
@@ -51,7 +84,7 @@ def menu_path(cfg: dict) -> Path:
 def ensure_menu(cfg: dict) -> Path:
     path = menu_path(cfg)
     if not path.is_file():
-        path.write_text(DEFAULT_MENU, encoding="utf-8", newline="\n")
+        path.write_text(default_menu(), encoding="utf-8", newline="\n")
     return path
 
 
@@ -72,6 +105,11 @@ def load_menu(cfg: dict) -> list[tuple[str, str]]:
 
 def install(cfg: dict, name: str) -> tuple[bool, str]:
     """下载并解压一个包到 bin/ 下。"""
+    if not plat.IS_WINDOWS and name in SYSTEM_PACKAGES:
+        return False, (
+            f"Linux 上 {name} 用发行版的包管理器装，别从清单里下：\n"
+            f"  sudo pacman -S {SYSTEM_PACKAGES[name]}\n"
+            "（自己下一份二进制会和系统的依赖库打架，也拿不到安全更新）")
     entries = dict(load_menu(cfg))
     if name not in entries:
         return False, f"清单里没有叫 {name} 的包（用 pkg list 看看有什么）"

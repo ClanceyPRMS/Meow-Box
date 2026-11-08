@@ -26,6 +26,7 @@ from . import launcher as launchmod
 from . import migrate as migratemod
 from . import packages as pkgmod
 from . import php as phpmod
+from . import plat
 from . import portable as portablemod
 from . import runtime
 from . import services as svcmod
@@ -645,8 +646,9 @@ class Panel:
                 [vhost.hostname_for(n, self.cfg["sites"]["tld"])
                  for n in vhost.scan(self.lay["www"])]
 
-        # 写 hosts 要管理员；界面里也别让人手动去敲命令 —— 直接弹 UAC
-        if not util.is_admin():
+        # Windows：写 hosts 要管理员，界面里也别让人手动去敲命令 —— 直接弹 UAC。
+        # Linux：hosts 是 root 的，hosts.sync() 内部会用 pkexec 弹 polkit 认证框。
+        if not util.is_admin() and plat.IS_WINDOWS:
             if not names:
                 messagebox.showinfo("喵盒", "还没有站点，不用同步")
                 return
@@ -667,6 +669,8 @@ class Panel:
             return
 
         def job():
+            if not util.is_admin() and not plat.IS_WINDOWS:
+                self.log("正在写 hosts —— 会弹一个认证框，输一下密码就行")
             result = hostsmod.sync(names, apply=True)
             if result.get("error"):
                 raise PermissionError(result["error"])
@@ -701,7 +705,16 @@ class Panel:
         path = hostsmod.default_path()
         if util.is_admin():
             util.open_path(path)
-            self.log(f"已打开 {path}（当前就有管理员权限，直接保存即可）")
+            self.log(f"已打开 {path}（当前就有 root 权限，直接保存即可）")
+            return
+        if not plat.IS_WINDOWS:
+            # Linux 上没有「提权版记事本」这种东西：pkexec 拉起图形编辑器时
+            # 环境变量会被清掉，开出来也多半是坏的。给路径和命令更实在。
+            messagebox.showinfo(
+                "喵盒", f"/etc/hosts 只有 root 能改。\n\n{path}\n\n"
+                        f"用你顺手的编辑器改一下：\n  sudo nano {path}\n\n"
+                        "改完面板里点一次「同步 hosts」会核对结果。")
+            self.log(f"hosts 路径：{path}（用 sudo 编辑）")
             return
         if not messagebox.askyesno(
                 "喵盒", f"hosts 只有管理员能保存。\n\n{path}\n\n"
@@ -977,6 +990,8 @@ class Panel:
     # ------------------------------------------------------------ 托盘
     def tray_running(self) -> bool:
         """托盘在不在跑（查单实例互斥量，不启动也不占用它）。"""
+        if not plat.IS_WINDOWS:
+            return False
         from . import tray
         try:
             return tray.is_running()
@@ -985,6 +1000,13 @@ class Panel:
 
     def start_tray(self, complain: bool = True) -> bool:
         """把托盘拉起来；已经在跑就不重复开（托盘自己是单实例）。"""
+        if not plat.IS_WINDOWS:
+            if complain:
+                messagebox.showinfo(
+                    "喵盒", "托盘只有 Windows 版（靠 Win32 的 Shell_NotifyIcon）。\n\n"
+                            "Linux 上就用这个面板就行 —— 关掉面板后服务还在跑，\n"
+                            "再开面板就能接着管。")
+            return False
         if self.tray_running():
             if complain:
                 self.log("托盘已经在后台跑了（托盘只能有一个）")
@@ -1002,7 +1024,10 @@ class Panel:
 
         以前只做了菜单里那个「启动系统托盘」的手动项，于是用户开了面板、
         服务都跑着，关掉面板之后一个能点的地方都没有 —— 还得回来开面板。
+        Linux 上没有托盘，这里直接什么都不做。
         """
+        if not plat.IS_WINDOWS:
+            return
         if not (self.cfg.get("ui") or {}).get("tray_with_panel", True):
             return
         self.start_tray(complain=False)
@@ -1163,6 +1188,9 @@ class Panel:
 
     # ------------------------------------------------------------ 便携 / 启动器
     def _autostart_enabled(self) -> bool:
+        if not plat.IS_WINDOWS:
+            from . import launcher
+            return launcher.xdg_autostart_enabled(self.lay["root"])
         try:
             from . import tray
             return tray.autostart_enabled()
@@ -1171,6 +1199,17 @@ class Panel:
 
     def toggle_autostart(self) -> None:
         enable = bool(self.var_autostart.get())
+        if not plat.IS_WINDOWS:
+            from . import launcher
+            try:
+                launcher.set_xdg_autostart(self.lay["root"], enable)
+            except Exception as exc:                 # noqa: BLE001
+                self.var_autostart.set(not enable)
+                messagebox.showerror("喵盒", f"改开机自启失败：{exc}")
+                return
+            self.log(("✅ 已开启" if enable else "✅ 已关闭") +
+                     "开机自启（~/.config/autostart/meowbox.desktop）")
+            return
         try:
             from . import tray
             tray.set_autostart(enable)
@@ -1178,7 +1217,7 @@ class Panel:
             self.var_autostart.set(not enable)
             messagebox.showerror("喵盒", f"改开机自启失败：{exc}")
             return
-        self.log(("✅ 已开启" if enable else "✅ 已关闭") +
+        self.log((("✅ 已开启" if enable else "✅ 已关闭")) +
                  "开机自启（启动文件夹里的 .vbs，不写注册表）")
 
     def do_shortcut(self) -> None:

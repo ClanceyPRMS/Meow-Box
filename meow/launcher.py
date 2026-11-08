@@ -1,12 +1,16 @@
-"""双击启动器（.vbs）—— 便携的小关键。
+"""双击启动器 —— 便携的小关键。
 
 为什么不注册表 / 不做服务？因为"便携"的底线就是**文件夹搬走还能跑**。
 所以喵盒只用两条自发式的入口：
 
+**Windows**（`.vbs`）：
 * `meowbox-tray.vbs` / `meowbox-panel.vbs`：双击就跑，路径用
   `WScript.ScriptFullName` 现取，整个文件夹搬到别的盘也不会坏；
-* 开机自启 = 在「启动」文件夹里放一个同样的 .vbs（见 `tray.set_autostart`），
-  删掉就取消，不碰注册表。
+* 开机自启 = 在「启动」文件夹里放一个同样的 .vbs（见 `tray.set_autostart`）。
+
+**Linux**（`.desktop`）：
+* `meowbox-panel.desktop` —— 拖到 `~/.local/share/applications/` 就进应用菜单；
+* 开机自启 = `~/.config/autostart/meowbox.desktop`（XDG autostart，同样删掉就取消）。
 
 两种启动器：
 * **打包版**（根目录里有 `meowbox-tray.exe` / `meowbox-panel.exe`）→ 直接跑 exe，
@@ -18,9 +22,11 @@
 """
 from __future__ import annotations
 
+import os
+import shutil
 from pathlib import Path
 
-from . import runtime, util
+from . import plat, runtime, util
 
 VBS_TEMPLATE = (
     "' Meow Box launcher -- {label}  (meowbox.py {cmd})\n"
@@ -57,15 +63,19 @@ def exe_for(cmd: str) -> str:
 
 
 def has_exe(root) -> bool:
-    """根目录里是不是躺着打包好的 exe（决定启动器怎么写）。"""
+    """根目录里是不是躺着打包好的程序（决定启动器怎么写）。"""
     if runtime.frozen():
         return True
     root = Path(root)
+    if not plat.IS_WINDOWS:
+        return (root / "meowbox-panel").is_file() or (root / "meowbox").is_file()
     return (root / runtime.CONSOLE_EXE).is_file() or (root / exe_for("tray")).is_file()
 
 
 def write_launchers(root, python: str | None = None) -> list[Path]:
-    """把两个双击启动器写到喵盒根目录，返回生成的文件路径。"""
+    """把双击启动器写到喵盒根目录，返回生成的文件路径。"""
+    if not plat.IS_WINDOWS:
+        return _write_desktops(root, python)
     root = Path(root)
     use_exe = has_exe(root)
     py = python or util.preferred_pythonw()
@@ -79,6 +89,94 @@ def write_launchers(root, python: str | None = None) -> list[Path]:
         target.write_text(text, encoding="utf-16")
         made.append(target)
     return made
+
+
+# ------------------------------------------------------------------ Linux：.desktop
+DESKTOP_TEMPLATE = """[Desktop Entry]
+Type=Application
+Version=1.0
+Name={label}
+Comment=本地 Web 开发环境管家（喵盒）
+Exec={exec_line}
+Path={root}
+Terminal=false
+StartupNotify=false
+Categories=Development;
+{icon_line}"""
+
+
+def _desktop_exec(root: Path, cmd: str, python: str | None = None) -> str:
+    """Desktop Entry 的 Exec= 一行（带正确的引号）。
+
+    `root` 是**数据目录**，`meowbox.py` 可能在另一个地方（代码和数据分开）
+    —— 所以脚本路径要问 `runtime.app_root()`，别拿 root 去拼。
+    """
+    root = Path(root)
+    app = Path(runtime.app_root())
+    exe_name = {"gui": "meowbox-panel", "tray": "meowbox-tray"}.get(cmd)
+    if exe_name and (app / exe_name).is_file():
+        return f'"{app / exe_name}" --root "{root}"'
+    py = python or util.preferred_pythonw()
+    script = app / "meowbox.py"
+    return f'"{py}" "{script}" --root "{root}" {cmd}'
+
+
+def _icon_line(root: Path) -> str:
+    for name in ("meowbox.png", "meowbox.svg", "meowbox.ico"):
+        candidate = Path(root) / "assets" / name
+        if candidate.is_file():
+            return f"Icon={candidate}\n"
+    return ""
+
+
+def desktop_entry(root, cmd: str = "gui", label: str = "喵盒 Meow Box",
+                  python: str | None = None) -> str:
+    root = Path(root).resolve()
+    return DESKTOP_TEMPLATE.format(
+        label=label,
+        exec_line=_desktop_exec(root, cmd, python),
+        root=root,
+        icon_line=_icon_line(root),
+    )
+
+
+def _write_desktops(root, python: str | None = None) -> list[Path]:
+    root = Path(root)
+    target = root / "meowbox-panel.desktop"
+    target.write_text(desktop_entry(root, "gui", python=python),
+                      encoding="utf-8", newline="\n")
+    target.chmod(0o755)
+    return [target]
+
+
+def _autostart_dir() -> Path:
+    return Path(os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config")) / "autostart"
+
+
+def autostart_path() -> Path:
+    return _autostart_dir() / "meowbox.desktop"
+
+
+def xdg_autostart_enabled(root=None) -> bool:
+    return autostart_path().is_file()
+
+
+def set_xdg_autostart(root, enable: bool) -> Path:
+    """开机自启：往 `~/.config/autostart/` 放/删一个 .desktop（不碰 systemd）。"""
+    path = autostart_path()
+    if not enable:
+        path.unlink(missing_ok=True)
+        return path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(desktop_entry(root, "gui", label="喵盒 Meow Box（开机自启）"),
+                    encoding="utf-8", newline="\n")
+    path.chmod(0o644)
+    return path
+
+
+def has_desktop(root) -> bool:
+    """Linux：根目录里有没有生成过 .desktop。"""
+    return (Path(root) / "meowbox-panel.desktop").is_file()
 
 
 def _read(path) -> str:

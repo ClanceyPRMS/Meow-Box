@@ -33,6 +33,7 @@
 from __future__ import annotations
 
 import argparse
+import platform
 import re
 import shutil
 import sys
@@ -47,6 +48,7 @@ if not getattr(sys, "frozen", False):
 
 from meow import __version__                      # noqa: E402
 from meow import config as cfgmod                 # noqa: E402
+from meow import plat                             # noqa: E402
 from meow import runtime                          # noqa: E402
 from meow import hosts as hostsmod                # noqa: E402
 from meow import launcher as launchmod            # noqa: E402
@@ -131,7 +133,7 @@ def _server_line(cfg: dict, bins: dict) -> str:
     name = svcmod.server_name(cfg)
     found = bins.get(name)
     if not found:
-        return f"{svcmod.pretty(name)} —— 没找到程序目录"
+        return f"{svcmod.pretty(name)} —— 没找到程序（装一个，或者 pkg install）"
     from meow import php as phpmod
     versions = phpmod.scan(cfg)
     ports = phpmod.port_map(cfg, versions)
@@ -139,7 +141,9 @@ def _server_line(cfg: dict, bins: dict) -> str:
         pairs = "、".join(f"{l}→{p}" for l, p in ports.items()) or "没装 PHP"
         return f"{svcmod.pretty(name)}（PHP 走 FastCGI：{pairs}）"
     default = phpmod.default_label(cfg, versions)
-    return f"{svcmod.pretty(name)}（PHP {default or '—'} 以模块方式挂载）"
+    if plat.IS_WINDOWS:
+        return f"{svcmod.pretty(name)}（PHP {default or '—'} 以模块方式挂载）"
+    return f"{svcmod.pretty(name)}（PHP {default or '—'} 走 FastCGI —— Linux 没有 mod_php）"
 
 
 # --------------------------------------------------------------------------
@@ -165,13 +169,28 @@ def cmd_init(args) -> int:
 
     bins = cfgmod.discover(cfg)
     _title(f"喵盒已就位（v{__version__}）")
+    _row("平台", plat.describe())
     _row("根目录", fwd(root))
     _row("网站目录", fwd(lay["www"]))
-    _row("二进制来源", fwd(provider) if provider else "喵盒自己的 bin/")
+    _row("二进制来源", fwd(provider) if provider else
+         ("自动探测（系统包 / 本地 bin）" if not plat.IS_WINDOWS else "喵盒自己的 bin/"))
+    missing = []
     for name, path in bins.items():
-        _row(name, fwd(path) if path else "— 没找到")
+        shown = getattr(path, "exe", None) or path
+        _row(name, fwd(shown) if shown else "— 没找到")
+        if not path:
+            missing.append(name)
     _row("HTTP 端口", str(cfg["web"]["http_port"]))
     _row("站点后缀", "." + cfg["sites"]["tld"])
+
+    if missing and not plat.IS_WINDOWS:
+        print("\n  还缺组件，用系统的包管理器装：")
+        need = [pkgmod.SYSTEM_PACKAGES[m] for m in missing
+                if m in pkgmod.SYSTEM_PACKAGES]
+        if need:
+            print("     sudo pacman -S " + " ".join(need))
+        if "mailpit" in missing:
+            print("     python meowbox.py pkg install mailpit    # 官方仓库里没有")
     print("\n  下一步：  " + runtime.localize("python meowbox.py list")
           + "  →  render  →  start all")
     return 0
@@ -181,8 +200,10 @@ def cmd_info(args) -> int:
     cfg, bins = _load(Path(args.root))
     lay = cfgmod.layout(cfg)
     _title(f"喵盒 v{__version__}")
+    _row("平台", plat.describe())
     _row("根目录", cfg["root"])
-    _row("二进制来源", cfg.get("provider") or "本地 bin/")
+    _row("二进制来源", cfg.get("provider") or
+         ("自动探测（系统包 / 本地 bin）" if not plat.IS_WINDOWS else "本地 bin/"))
     _row("Web 服务器", _server_line(cfg, bins))
     _row("站点后缀", "." + cfg["sites"]["tld"])
     _row("HTTP/HTTPS", f"{cfg['web']['http_port']} / {cfg['web']['https_port']}  ssl={cfg['web']['ssl']}")
@@ -191,7 +212,8 @@ def cmd_info(args) -> int:
     mail = cfg.get("mailpit") or {}
     if mail.get("enabled", True):
         _row("Mailpit", f"SMTP {mail.get('smtp_port', 1025)} / 收件箱 {mail.get('http_port', 8025)}")
-    _row("管理员权限", "是" if util.is_admin() else "否（写 hosts 需要）")
+    _row("管理员权限", "是" if util.is_admin() else
+         ("否（写 hosts 时会弹 pkexec）" if not plat.IS_WINDOWS else "否（写 hosts 需要）"))
     print("\n  探测到的组件：")
     for name, path in bins.items():
         _row(name, fwd(path) if path else "— 没找到")
@@ -346,6 +368,12 @@ def _ensure_config(args, root: Path) -> None:
 
 
 def cmd_tray(args) -> int:
+    if not plat.IS_WINDOWS:
+        print("喵盒托盘只有 Windows 版 —— 它靠 Win32 的 Shell_NotifyIcon，"
+              "Linux 上没有等价而且简单的东西。\n")
+        print("  用面板就行：  python meowbox.py gui")
+        print("  想从应用菜单里点开：  python meowbox.py shortcut")
+        return 1
     from meow import tray
     root = Path(args.root).resolve()
     _ensure_config(args, root)
@@ -357,6 +385,7 @@ def cmd_tray(args) -> int:
 
 def cmd_gui(args) -> int:
     """打开控制面板。**没有配置也能开**：会先按默认值初始化，别逼用户回命令行。"""
+    plat.ensure_display()
     from meow import gui
     root = Path(args.root).resolve()
     _ensure_config(args, root)
@@ -370,12 +399,17 @@ def cmd_shortcut(args) -> int:
     made = launchmod.write_launchers(root, py)
     _title("双击启动器已生成")
     if launchmod.has_exe(root):
-        _row("启动方式", "打包版 exe（不需要 Python）")
+        _row("启动方式", "打包版（不需要 Python）")
     else:
         _row("用的解释器", py)
     for path in made:
         _row("", fwd(path))
-    print("\n  双击上面任意一个 .vbs 就能启动喵盒，不会弹黑框窗口")
+    if plat.IS_WINDOWS:
+        print("\n  双击上面任意一个 .vbs 就能启动喵盒，不会弹黑框窗口")
+    else:
+        print("\n  把它放进应用菜单：")
+        print(f"     cp {fwd(made[0])} ~/.local/share/applications/")
+        print("  开机自启：面板「文件」菜单里勾一下，或者 `python meowbox.py autostart on`")
     return 0
 
 
@@ -421,7 +455,9 @@ def cmd_portable(args) -> int:
         cfg, bins = _load(Path(args.root))
 
     info = portablemod.report(cfg, bins)
-    _title("便携检查（喵盒 = 一个文件夹，不装服务、不写注册表）")
+    _title("便携检查（喵盒 = 一个文件夹，不装服务、不写注册表）"
+           if plat.IS_WINDOWS else
+           "便携检查（喵盒 = 一个文件夹，不装 systemd 服务、不改系统配置）")
     marks = {"ok": "✅", "warn": "⚠️ ", "info": "ℹ️ "}
     for level, item, note in info["checks"]:
         print(f"  {marks.get(level, '·')} {item:<10} {note}")
@@ -436,6 +472,8 @@ def cmd_portable(args) -> int:
 
 
 def cmd_autostart(args) -> int:
+    if not plat.IS_WINDOWS:
+        return _cmd_autostart_linux(args)
     from meow import tray
     if not args.state:
         _title("开机自启")
@@ -445,6 +483,23 @@ def cmd_autostart(args) -> int:
     enable = args.state == "on"
     tray.set_autostart(enable)
     print(("✅ 已开启" if enable else "✅ 已关闭") + "开机自启")
+    return 0
+
+
+def _cmd_autostart_linux(args) -> int:
+    """Linux：XDG autostart —— 往 ~/.config/autostart/ 放一个 .desktop。"""
+    from meow import launcher as launchmod
+    cfg, _ = _load(Path(args.root))
+    root = Path(cfg["root"])
+    path = launchmod.autostart_path()
+    if not args.state:
+        _title("开机自启（XDG autostart）")
+        _row("状态", "已开启" if launchmod.xdg_autostart_enabled(root) else "已关闭")
+        _row("位置", fwd(path))
+        return 0
+    enable = args.state == "on"
+    launchmod.set_xdg_autostart(root, enable)
+    print(("✅ 已开启" if enable else "✅ 已关闭") + "开机自启：" + fwd(path))
     return 0
 
 
@@ -643,6 +698,92 @@ def cmd_freeport(args) -> int:
     return 0 if ok else 1
 
 
+def _getcap(exe: Path) -> str:
+    """读一个二进制当前的 capabilities（Linux `getcap`）。"""
+    getcap = shutil.which("getcap")
+    if not getcap:
+        return ""
+    _rc, out, _err = util.run([getcap, str(exe)], timeout=10)
+    return out.strip()
+
+
+def cmd_cap(args) -> int:
+    """Linux：给 httpd / nginx 加 CAP_NET_BIND_SERVICE。
+
+    低于 1024 的端口（80 / 443）只有 root 能绑。喵盒的底线是「不用 root 跑
+    服务」，所以用 `setcap` 给二进制**最小的一个能力**，而不是整个进程提权。
+
+    注意：`pacman -Syu apache` 换掉二进制之后这个能力会丢（xattr 跟着文件走），
+    升级完再跑一次 `python meowbox.py cap on` 就行。
+    """
+    if plat.IS_WINDOWS:
+        print("Windows 上没有这回事：任何用户都能绑 80 / 443。")
+        return 0
+    action = args.action or "check"
+    cfg, bins = _load(Path(args.root))
+    targets = [(name, p.exe) for name in ("apache", "nginx")
+               for p in [bins.get(name)] if p is not None and p.exe.is_file()]
+    if not targets:
+        print("没找到 httpd / nginx。先装一个：sudo pacman -S apache nginx")
+        return 1
+
+    if action == "check":
+        _title("端口能力（CAP_NET_BIND_SERVICE）")
+        for name, exe in targets:
+            _row(svcmod.pretty(name), f"{fwd(exe)}   {_getcap(exe) or '（没有）'}")
+        http_port = int(cfg["web"]["http_port"])
+        https_port = int(cfg["web"]["https_port"])
+        print(f"\n  当前端口：HTTP {http_port} / HTTPS {https_port}")
+        if plat.needs_cap(http_port) or plat.needs_cap(https_port):
+            print("  低于 1024 的端口要求上面这些程序带 cap_net_bind_service")
+            print("  想用 80/443：  python meowbox.py cap on")
+        else:
+            print("  两个端口都 ≥ 1024，不需要额外能力 —— 直接 start 就行")
+        return 0
+
+    cap_tool = plat.cap_tool()
+    if not cap_tool:
+        print("❌ 没找到 setcap（装一下：sudo pacman -S libcap）")
+        return 1
+
+    if action == "off":
+        argv_list = [[cap_tool, "-r", str(exe)] for _n, exe in targets]
+    else:
+        argv_list = [[cap_tool, "cap_net_bind_service=+ep", str(exe)]
+                     for _n, exe in targets]
+
+    if args.dry_run:
+        for argv in argv_list:
+            print("  " + util.sudo_hint(argv))
+        return 0
+
+    pkexec = shutil.which("pkexec")
+    okay = True
+    _title("设置端口能力")
+    for (name, exe), argv in zip(targets, argv_list):
+        if util.is_admin():
+            rc, out, err = util.run(argv, timeout=60)
+        elif pkexec:
+            print(f"  正在提权改 {svcmod.pretty(name)}（会弹认证框）…")
+            rc, out, err = util.run([pkexec, *argv], timeout=180)
+        else:
+            print(f"  手动跑：{util.sudo_hint(argv)}")
+            okay = False
+            continue
+        cap = _getcap(exe)
+        good = (action == "off" and "cap_net_bind_service" not in cap) or \
+               (action != "off" and "cap_net_bind_service" in cap)
+        print(("  ✅ " if good else "  ⚠️  ")
+              + f"{svcmod.pretty(name)}：{cap or '（没有能力）'}")
+        if not good:
+            okay = False
+            detail = (err or out).strip()[-300:]
+            if detail:
+                print("     " + detail)
+            print(f"     手动跑：{util.sudo_hint(argv)}")
+    return 0 if okay else 1
+
+
 def cmd_restart(args) -> int:
     cfg, bins = _load(Path(args.root))
     services = svcmod.build(cfg, bins)
@@ -835,6 +976,12 @@ def cmd_mail(args) -> int:
 
 def cmd_migrate(args) -> int:
     """从 Laragon 收编站点和数据库（默认只预览，加 --yes 才真搬）。"""
+    if not plat.IS_WINDOWS:
+        print("`migrate` 只认 Windows 上的 Laragon 目录，Linux 上用不了。\n")
+        print("  Linux 上装站点：直接把站点文件夹拷进 www/，再")
+        print("    python meowbox.py render && python meowbox.py hosts --apply")
+        print("  数据库：用 mysqldump 导出，再 `mariadb -u root < 文件.sql` 导入。")
+        return 1
     cfg, bins = _load(Path(args.root))
     _title("从 Laragon 迁移")
     try:
@@ -943,6 +1090,11 @@ def cmd_migrate(args) -> int:
 
 def cmd_vendor(args) -> int:
     """彻底自带：把 provider 里的程序复制进自己的 bin/，然后把 provider 关掉。"""
+    if not plat.IS_WINDOWS:
+        print("`vendor` 是给 Windows 用的（把 Laragon 的程序复制进 bin/）。\n")
+        print("  Linux 上本来就「不借别人的」：Apache / PHP / MariaDB 走系统包，")
+        print("  喵盒只生成配置、看管进程。不需要这一步。")
+        return 1
     cfg, bins = _load(Path(args.root))
     _title("彻底自带：把程序搬进喵盒自己的 bin/")
 
@@ -1252,8 +1404,10 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="cmd")
 
     p = sub.add_parser("init", help="初始化喵盒")
-    p.add_argument("--provider", default="D:/laragon",
-                   help="从哪借 bin/ 目录（默认 D:/laragon；传空字符串表示用喵盒自己的 bin/）")
+    p.add_argument("--provider",
+                   default=("D:/laragon" if plat.IS_WINDOWS else ""),
+                   help=("从哪借 bin/ 目录（Windows 默认 D:/laragon；"
+                         "Linux 留空 = 用系统包 / 喵盒自己的 bin/）"))
     p.set_defaults(func=cmd_init)
 
     sub.add_parser("info", help="显示配置和探测结果").set_defaults(func=cmd_info)
@@ -1296,6 +1450,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--apply", action="store_true", help="真的写入（不加只预览）")
     p.add_argument("--hosts-file", default=None, help="指定 hosts 文件路径（测试用）")
     p.set_defaults(func=cmd_hosts)
+
+    p = sub.add_parser("cap", help="Linux：给 httpd/nginx 加「绑 80/443」的能力（setcap）")
+    p.add_argument("action", nargs="?", default="check", choices=["check", "on", "off"])
+    p.add_argument("--dry-run", action="store_true", help="只打印要跑的命令，不动手")
+    p.set_defaults(func=cmd_cap)
 
     p = sub.add_parser("start", help="启动服务")
     p.add_argument("names", nargs="*",
