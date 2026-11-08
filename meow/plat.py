@@ -538,6 +538,48 @@ def preferred_python() -> str:
     return python_windowless()
 
 
+def fs_type(path) -> str | None:
+    """路径所在文件系统的类型（`ntfs3` / `ext4` / `btrfs` …）；查不到返回 None。
+
+    跨系统开发要关心这个：NTFS 上的数据库目录被两个系统轮着打开是有风险的，
+    所以 `init` 会提示「数据目录最好放 Linux 原生分区」。
+    """
+    if IS_WINDOWS:
+        return None
+    try:
+        target = str(Path(path).resolve())
+    except OSError:
+        return None
+    try:
+        text = Path("/proc/mounts").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    best_len, best_fs = -1, None
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        mount = parts[1].replace("\\040", " ")          # /proc/mounts 用 \040 转义空格
+        if target == mount or target.startswith(mount.rstrip("/") + "/"):
+            if len(mount) > best_len:
+                best_len, best_fs = len(mount), parts[2]
+    return best_fs
+
+
+def foreign_fs(path) -> str | None:
+    """这个路径在「不是 Linux 原生」的文件系统上吗？是就返回类型。
+
+    `ext4/btrfs/xfs/zfs/f2fs/overlay/tmpfs` 都算原生；
+    `ntfs*/fuseblk/vfat/exfat` 这类跨系统共享盘会被认出来。
+    """
+    fs = fs_type(path)
+    if fs is None:
+        return None
+    native = ("ext2", "ext3", "ext4", "btrfs", "xfs", "zfs", "f2fs",
+              "overlay", "tmpfs", "bcachefs", "reiserfs")
+    return None if fs in native else fs
+
+
 def ensure_display() -> bool:
     """Linux/Wayland：Tk 只能走 X11，`DISPLAY` 没传下来就自己猜一个。
 

@@ -104,10 +104,44 @@ class MySQL:
         # initialize 完之后会生成 mysql / performance_schema 这些系统库
         return (self.datadir / "mysql").is_dir()
 
+    def foreign_datadir(self) -> str | None:
+        """这个 datadir 是不是**另一个数据库程序**建的？是的话返回它的名字。
+
+        为什么要有这个检查：跨系统开发时最容易踩的坑就是「Linux 上的
+        MariaDB 打开了 Windows 上 MySQL 8 的数据目录」。两者虽然都叫
+        `data/mysql`，但 MySQL 8 的数据字典是 `mysql.ibd`（InnoDB 表空间），
+        MariaDB 认不出来 —— 轻则启动失败，重则**尝试初始化并覆盖系统表**。
+
+        所以启动前先看一眼：只认自己这一套的标记，别的一律拒绝。
+        """
+        if not self.datadir.is_dir():
+            return None
+        # MySQL 8.0 / 8.4：数据字典是 mysql.ibd 这个文件
+        if (self.datadir / "mysql.ibd").is_file():
+            return "MySQL 8.x"
+        # MySQL 5.7 及更早：mysql 目录下是 .frm 表定义
+        mysql_dir = self.datadir / "mysql"
+        if mysql_dir.is_dir() and any(mysql_dir.glob("*.frm")):
+            if not (mysql_dir / "global_priv.MAD").exists():
+                return "MySQL 5.7 或更早"
+        return None
+
     def init(self):
         """初始化数据目录（root 无密码）。"""
         if not self.available:
             raise RuntimeError("没找到 MySQL / MariaDB")
+        foreign = self.foreign_datadir()
+        if foreign is not None:
+            raise RuntimeError(
+                f"这个数据目录是 {foreign} 建的，不能拿 {self.exe.name} 去打开：\n"
+                f"  {fwd(self.datadir)}\n"
+                "跨系统开发时最容易踩的就是这个 —— Windows 上的 MySQL 数据目录\n"
+                "和 Linux 上的 MariaDB 数据目录虽然都叫 data/mysql，但格式不兼容，\n"
+                "强行打开有可能把系统表覆盖掉。\n\n"
+                "两个办法：\n"
+                "  ① 换一个数据目录（推荐）：改 meowbox.config.json 的 sites.www 旁边那个\n"
+                "     root，或者用 --root 指到 Linux 自己的分区；\n"
+                "  ② 真的要从那边搬数据：用 mysqldump 导出，不要拷 datadir。")
         if self.initialized():
             return 0, "数据目录已存在，跳过初始化", ""
         ensure_dir(self.datadir)
@@ -156,6 +190,12 @@ class MySQL:
             raise RuntimeError("没找到 MySQL / MariaDB")
         if self.running():
             return self._pid()
+        foreign = self.foreign_datadir()
+        if foreign is not None:
+            raise RuntimeError(
+                f"不启动：这个数据目录是 {foreign} 建的，{self.exe.name} 打开会出事。\n"
+                f"  {fwd(self.datadir)}\n"
+                "换一个数据目录（--root），或者用 mysqldump 迁数据 —— 别共用 datadir。")
         if util.port_in_use(self.port):
             holder = util.who_holds_port(self.port) or "未知程序"
             raise RuntimeError(f"端口 {self.port} 已被占用：{holder}")

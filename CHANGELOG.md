@@ -64,6 +64,28 @@
   `cert9.db`，另外往 p11-kit 的用户级 anchors 放一份给 curl/GTK 用。
 - **托盘是 Windows 限定**（Win32 `Shell_NotifyIcon`），Linux 上直接说明并用面板。
 
+### 跨系统开发的护栏（源码在 NTFS 上）
+
+我们真实的用法是源码放在那块 NTFS 共享盘、两个系统轮着用，所以加了三个
+「防手滑」的检查（都实测过）：
+
+- **`db init` / `start mysql` 拒绝打开别的数据库建的 datadir**。
+  Windows 那边是 MySQL 8.x（数据字典 `mysql.ibd`），Linux 这边是 MariaDB
+  （`mysql/` 目录）—— 格式不兼容，MariaDB 强行打开有可能初始化并覆盖系统表。
+  现在 `MySQL.foreign_datadir()` 会认出来并直接拒绝，给出换目录 / 用 mysqldump 的建议。
+- **`init` 不再默默覆盖已有配置**。以前 `--root` 指错一次就把另一边的端口、
+  站点 PHP 版本、autostart 全换掉了。现在发现 `meowbox.config.json` 就拒绝，
+  要重来必须显式 `init --force`。
+- **`info` / `init` 会提示数据目录在跨系统共享盘上**。
+  `plat.fs_type()` 读 `/proc/mounts`，认得出 `ntfs3` / `exfat` / `vfat`。
+
+另外 `.gitignore` 补上了 `_internal.old-*/`、`cache/`，
+并设了 `core.fileMode=false`（NTFS 的 ACL 变化别当成文件改动）。
+
+实测 ntfs3 的能力（免得以后又怀疑）：**权限位可读可设、符号链接可建可入库、
+时间戳纳秒精度、`git fsck` 通过**。唯一真正不一致的是大小写 ——
+Linux 侧敏感、Windows 侧不敏感，所以别在两个平台间传「只差大小写」的文件名。
+
 ### 已知限制（Linux）
 
 - 没有托盘；用面板或者 `.desktop`。

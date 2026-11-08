@@ -153,6 +153,20 @@ def cmd_init(args) -> int:
     root = Path(args.root).resolve()
     provider = Path(args.provider).resolve() if args.provider else None
     ensure_dir(root)
+
+    # 已经初始化过就别默默覆盖 —— 跨系统开发时 `--root` 指错地方一次
+    # 就会把另一边的端口、站点 PHP 版本、autostart 全换掉。
+    existing = cfgmod.config_path(root)
+    if existing.is_file() and not getattr(args, "force", False):
+        old = cfgmod.raw_config(root)
+        print(f"这个目录已经初始化过了：{existing}")
+        print(f"  里面的 provider = {old.get('provider')!r}，"
+              f"HTTP 端口 = {(old.get('web') or {}).get('http_port')}")
+        print("\n  覆盖会把这套配置整个换掉（端口、站点 PHP 版本、autostart…）。")
+        print("  - 只是想看看现状：  python meowbox.py --root <这里> info")
+        print("  - 真要重新初始化：  python meowbox.py --root <这里> init --force")
+        return 1
+
     _ensure_templates(root)
 
     cfg = cfgmod.default_config(root, provider)
@@ -182,6 +196,12 @@ def cmd_init(args) -> int:
             missing.append(name)
     _row("HTTP 端口", str(cfg["web"]["http_port"]))
     _row("站点后缀", "." + cfg["sites"]["tld"])
+
+    fs = plat.foreign_fs(root)
+    if fs is not None:
+        print(f"\n  ⚠️  数据目录在 {fs} 上（跨系统共享盘）。代码放这儿没问题，"
+              "\n     但 data/ 里的数据库最好放 Linux 原生分区 —— 别让两个系统"
+              "\n     轮着打开同一个 datadir。见 README「Linux」一节。")
 
     if missing and not plat.IS_WINDOWS:
         print("\n  还缺组件，用系统的包管理器装：")
@@ -1408,6 +1428,8 @@ def build_parser() -> argparse.ArgumentParser:
                    default=("D:/laragon" if plat.IS_WINDOWS else ""),
                    help=("从哪借 bin/ 目录（Windows 默认 D:/laragon；"
                          "Linux 留空 = 用系统包 / 喵盒自己的 bin/）"))
+    p.add_argument("--force", action="store_true",
+                   help="已经初始化过也照样覆盖（会把现有配置整个换掉）")
     p.set_defaults(func=cmd_init)
 
     sub.add_parser("info", help="显示配置和探测结果").set_defaults(func=cmd_info)
