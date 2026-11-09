@@ -38,6 +38,9 @@ uv run python meowbox.py info  # 看看探测到了什么
 > **为什么把 Python 钉在 3.14**：托盘用 `ctypes.wintypes.HCURSOR`，某些精简 /
 > 嵌入式解释器（比如 IDE 自带的 venv）里没有这个常量，托盘一启动就
 > `AttributeError`。`.python-version` 写死 3.14 + `uv sync`，就不用靠记性挑解释器。
+> 注意 `requires-python` 写的是 `>=3.10`，那不是拍脑袋：3.10.22 上 `compileall`
+> 和全套单测都真跑通过（24 个模块里只有 `tray` 是 Windows 专属、在 Linux 上不 import）。
+> 也就是说 **3.10+ 能跑命令行和面板，托盘和打包用 3.14**。
 
 仓库里**只有源码**：二进制（`bin/`）、网站（`www/`）、数据库（`data/`）、
 渲染出的配置（`etc/`）、日志（`logs/`）都在 `.gitignore` 里，各自在自己机器上生成。
@@ -48,6 +51,24 @@ uv run python meowbox.py info  # 看看探测到了什么
   `python meowbox.py pkg install apache php mysql` 从官方源下载原版。
 
 > **Linux 上不一样**：不下载自己的二进制，用发行版的包（见下面「Linux」一节）。
+
+### 跑测试
+
+```bash
+uv run python -m pytest        # 或者 pip install pytest && python -m pytest
+```
+
+测试只碰**纯逻辑**：模板渲染、hosts 拼接、配置相对化、清单解析、版本号一致性。
+不启任何服务，所以 Linux 上也能跑 —— 改 `hosts.py` / `config.py` / `vhost.py`
+不必切回 Windows 就能验。GitHub Actions 上跑三个组合：Ubuntu 3.10 / Ubuntu 3.14 /
+Windows 3.14（托盘和提权那条路只有真 Windows 能验）。
+
+人工部分测试盖不住，改完自己补两条：
+
+```bash
+python meowbox.py render              # 内部会跑 httpd -t / nginx -t
+grep -n '@' etc/apache2/httpd.conf    # 占位符不能有残留
+```
 
 ## Linux（Arch 已验证）
 
@@ -685,6 +706,12 @@ D:\meowbox\
 ├─ uv.lock                 依赖配方卡（精确版本，别手改）
 ├─ .python-version         开发用的 Python 版本（3.14）
 ├─ .venv\                  uv 建的虚拟环境（不进版本库）
+├─ tests\                  单元测试（pytest；纯逻辑，两个平台都能跑）
+├─ .github\workflows\      CI（push/PR 跑测试；手动触发打 Windows 包）
+├─ SECURITY.md             安全问题怎么报（别开公开 Issue）
+├─ CONTRIBUTING.md         改代码 / 提 PR 的硬规矩
+├─ CHANGELOG.md            更新日志
+├─ LICENSE                 MIT
 ├─ meowbox.exe             ┐
 ├─ meowbox-tray.exe        │ 打包版三个入口（双击就用，不用装 Python）
 ├─ meowbox-panel.exe       ┘

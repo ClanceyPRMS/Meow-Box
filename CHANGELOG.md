@@ -7,6 +7,24 @@
 
 ## [未发布]
 
+### 新增
+
+- **第一批单元测试**（`tests/`，pytest，46 个用例）：模板渲染、hosts 拼接、
+  配置相对化、清单解析、版本号一致性。全是纯逻辑，不起服务 —— 所以在 Linux
+  上也能跑，改 `hosts.py` / `config.py` / `vhost.py` 不用切回 Windows。
+- **CI**（GitHub Actions）：push / PR 跑 `compileall` + pytest，矩阵是
+  Ubuntu 3.10、Ubuntu 3.14、Windows 3.14；另有一个手动触发的 Windows 打包
+  工作流（只上传 artifact，不自动发 Release）。
+- `SECURITY.md`（漏洞报告渠道 + 「哪些是设计决定而非漏洞」）、`CONTRIBUTING.md`
+  （平台改动的硬规矩 + 提 PR 前自查清单）。
+- Release 附 SHA256：v0.3.0 起，zip 旁边多一个 `.sha256`，说明里也写了校验方法。
+
+### 变更
+
+- `requires-python >=3.10` 现在有证据了：3.10.22 上 `compileall` 和全套单测都通过，
+  24 个模块只有 `tray`（Windows 专属）不能 import。钉 3.14 是为了**打包**
+  （精简解释器缺 `ctypes.wintypes.HCURSOR`）。README 里写清楚了。
+
 ### 计划中
 
 - 站点级 rewrite 配置（现在要在 `auto.*.conf` 里手加，重新渲染就没了）
