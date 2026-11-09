@@ -64,6 +64,21 @@
   `cert9.db`，另外往 p11-kit 的用户级 anchors 放一份给 curl/GTK 用。
 - **托盘是 Windows 限定**（Win32 `Shell_NotifyIcon`），Linux 上直接说明并用面板。
 
+### 修复（Windows 上回归时抓到的）
+
+- **`mod_mpm_winnt.so` 不存在**：Windows 的 winnt MPM 是**编译进 `httpd.exe`** 的，
+  `modules/` 里根本没有这个 `.so`，写了就是「找不到指定的模块」。
+  Linux 上才需要 `LoadModule mpm_event_module` + `mod_unixd`。
+  见 `Apache._mpm_modules()`。
+- **模块路径改用模板占位符**：原来靠 Apache 的 `Define MEOW_MODULES` + `${…}`
+  展开，改成直接在模板里写 `@MODULES_DIR@`、在 Python 里用 f-string 插值 ——
+  少一层依赖，两个平台行为一致。
+- **`foreign_datadir()` 判据写窄了**：一开始「看到 `mysql.ibd` 就拒绝」，
+  结果 Windows 上喵盒自己的 MySQL 8.4 数据目录被自己拦住了。
+  正确判据是**比对「datadir 属于哪套」和「当前 exe 是哪套」**：
+  `mysql.ibd` → MySQL 8；`aria_log_control` / `global_priv.MAD` → MariaDB。
+  配套就放行，不配套才拒绝。
+
 ### 跨系统开发的护栏（源码在 NTFS 上）
 
 我们真实的用法是源码放在那块 NTFS 共享盘、两个系统轮着用，所以加了三个

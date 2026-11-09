@@ -104,26 +104,49 @@ class MySQL:
         # initialize 完之后会生成 mysql / performance_schema 这些系统库
         return (self.datadir / "mysql").is_dir()
 
+    def datadir_flavor(self) -> str | None:
+        """这个 datadir 是**哪套数据库**建的？`mariadb` / `mysql8` / `mysql57` / None。"""
+        if not self.datadir.is_dir():
+            return None
+        mysql_dir = self.datadir / "mysql"
+        # MariaDB 的标记：aria 日志 + global_priv.MAD 表
+        if (self.datadir / "aria_log_control").is_file():
+            return "mariadb"
+        if mysql_dir.is_dir() and (mysql_dir / "global_priv.MAD").is_file():
+            return "mariadb"
+        # MySQL 8.x 的标记：数据字典是 mysql.ibd 这个文件
+        if (self.datadir / "mysql.ibd").is_file():
+            return "mysql8"
+        # MySQL 5.7 及更早：mysql 目录下是 .frm 表定义
+        if mysql_dir.is_dir() and any(mysql_dir.glob("*.frm")):
+            return "mysql57"
+        return None
+
+    def engine_flavor(self) -> str:
+        """当前这个二进制是哪套：`mariadb` 还是 `mysql`。"""
+        name = self.exe.name.lower()
+        return "mariadb" if "maria" in name else "mysql"
+
     def foreign_datadir(self) -> str | None:
-        """这个 datadir 是不是**另一个数据库程序**建的？是的话返回它的名字。
+        """datadir 和当前二进制**不配套**吗？不配套就返回 datadir 的来源描述。
 
         为什么要有这个检查：跨系统开发时最容易踩的坑就是「Linux 上的
         MariaDB 打开了 Windows 上 MySQL 8 的数据目录」。两者虽然都叫
         `data/mysql`，但 MySQL 8 的数据字典是 `mysql.ibd`（InnoDB 表空间），
         MariaDB 认不出来 —— 轻则启动失败，重则**尝试初始化并覆盖系统表**。
 
-        所以启动前先看一眼：只认自己这一套的标记，别的一律拒绝。
+        注意判据是「datadir 的来源」vs「当前 exe 的类型」：
+        MySQL 8 打开 MySQL 8 自己的 datadir 是**正常**的（Windows 上就是这样），
+        不能因为看到 `mysql.ibd` 就拦。
         """
-        if not self.datadir.is_dir():
+        build = self.datadir_flavor()
+        if build is None:
             return None
-        # MySQL 8.0 / 8.4：数据字典是 mysql.ibd 这个文件
-        if (self.datadir / "mysql.ibd").is_file():
-            return "MySQL 8.x"
-        # MySQL 5.7 及更早：mysql 目录下是 .frm 表定义
-        mysql_dir = self.datadir / "mysql"
-        if mysql_dir.is_dir() and any(mysql_dir.glob("*.frm")):
-            if not (mysql_dir / "global_priv.MAD").exists():
-                return "MySQL 5.7 或更早"
+        engine = self.engine_flavor()
+        if engine == "mariadb" and build.startswith("mysql"):
+            return "MySQL" if build == "mysql8" else "MySQL 5.7 或更早"
+        if engine == "mysql" and build == "mariadb":
+            return "MariaDB"
         return None
 
     def init(self):

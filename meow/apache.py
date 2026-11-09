@@ -127,29 +127,27 @@ class Apache:
         ensure_dir(lay["etc_apache"])
         ensure_dir(lay["run"])
 
+        # 模块目录：Windows 是版本目录下的 modules/，Linux 是 /usr/lib/httpd/modules
+        modules_dir = self.modules_dir
+        modules = fwd(modules_dir) if modules_dir is not None else "modules"
+
         # 有没有站点要用 FastCGI？有才加载 mod_proxy_fcgi
         names = vhost.scan(lay["www"])
         pool = phpmod.CgiPool(self.cfg, self.php_versions)
         fcgi_labels = pool.labels_for(names, "apache")
         if fcgi_labels:
             proxy_modules = (
-                "LoadModule proxy_module ${MEOW_MODULES}/mod_proxy.so\n"
-                "LoadModule proxy_fcgi_module ${MEOW_MODULES}/mod_proxy_fcgi.so"
+                f"LoadModule proxy_module {modules}/mod_proxy.so\n"
+                f"LoadModule proxy_fcgi_module {modules}/mod_proxy_fcgi.so"
             )
         else:
             proxy_modules = "# 没有站点需要 FastCGI —— 全都走 mod_php"
 
         mpm = plat.apache_mpm(self.exe) if self.available else (
             "winnt" if plat.IS_WINDOWS else "event")
-        modules_dir = self.modules_dir
-        if modules_dir is not None:
-            modules = fwd(modules_dir)
-        else:
-            modules = "modules"        # 老 behavior：相对 ServerRoot
         mime_types = self.mime_types
         mime_text = (fwd(mime_types) if mime_types is not None
                      else fwd(Path(self.server_root) / "conf" / "mime.types"))
-
         text = util.render_template(
             tpl,
             SERVERROOT=fwd(self.server_root),
@@ -166,8 +164,8 @@ class Apache:
             EXTRA_RUNTIME=self._runtime_block(),
             SSL_LISTEN=f"Listen {web['https_port']}" if ssl else "# SSL 未启用",
             SSL_MODULES=(
-                "LoadModule socache_shmcb_module ${MEOW_MODULES}/mod_socache_shmcb.so\n"
-                "LoadModule ssl_module ${MEOW_MODULES}/mod_ssl.so"
+                f"LoadModule socache_shmcb_module {modules}/mod_socache_shmcb.so\n"
+                f"LoadModule ssl_module {modules}/mod_ssl.so"
             ) if ssl else "# SSL 未启用（要开 HTTPS 就把 web.ssl 改成 true）",
             SSL_SEEDS=(
                 "<IfModule ssl_module>\n"
@@ -192,11 +190,18 @@ class Apache:
         return self.conf
 
     def _mpm_modules(self, mpm: str) -> str:
-        """按平台/编译情况加载正确的 MPM（Linux 还要 mod_unixd）。"""
+        """按平台/编译情况加载正确的 MPM。
+
+        **Windows 上什么都不用加载**：Apache Lounge 的 winnt MPM 是编译进
+        `httpd.exe` 的，`modules/` 里根本没有 `mod_mpm_winnt.so` ——
+        写了就是「找不到指定的模块」。
+        Linux 上 MPM（Arch 是 event）是 .so，而且必须配 `mod_unixd`。
+        """
         if plat.IS_WINDOWS:
-            return "LoadModule mpm_winnt_module ${MEOW_MODULES}/mod_mpm_winnt.so"
-        return (f"LoadModule mpm_{mpm}_module ${{MEOW_MODULES}}/mod_mpm_{mpm}.so\n"
-                "LoadModule unixd_module ${MEOW_MODULES}/mod_unixd.so")
+            return "# Windows：MPM(winnt) 编译在 httpd.exe 里，不用 LoadModule"
+        mods = fwd(self.modules_dir) if self.modules_dir is not None else "modules"
+        return (f"LoadModule mpm_{mpm}_module {mods}/mod_mpm_{mpm}.so\n"
+                f"LoadModule unixd_module {mods}/mod_unixd.so")
 
     def _user_block(self) -> str:
         """User / Group。

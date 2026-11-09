@@ -7,7 +7,6 @@ Define SRVROOT "@SERVERROOT@"
 ServerRoot "@SERVERROOT@"
 
 # 模块目录：Windows 是版本目录下的 modules/，Linux 是 /usr/lib/httpd/modules
-Define MEOW_MODULES "@MODULES_DIR@"
 
 # 别把 pid 文件写到 Apache 自己的 logs/ 里去（那会和别的工具打架）
 PidFile "@PIDFILE@"
@@ -26,26 +25,26 @@ ServerName @SERVER_NAME@
 
 # ---------- 模块（MPM 必须先加载） ----------
 @MPM_MODULES@
-LoadModule access_compat_module ${MEOW_MODULES}/mod_access_compat.so
-LoadModule auth_basic_module ${MEOW_MODULES}/mod_auth_basic.so
-LoadModule authn_core_module ${MEOW_MODULES}/mod_authn_core.so
-LoadModule authn_file_module ${MEOW_MODULES}/mod_authn_file.so
-LoadModule authz_core_module ${MEOW_MODULES}/mod_authz_core.so
-LoadModule authz_groupfile_module ${MEOW_MODULES}/mod_authz_groupfile.so
-LoadModule authz_host_module ${MEOW_MODULES}/mod_authz_host.so
-LoadModule authz_user_module ${MEOW_MODULES}/mod_authz_user.so
-LoadModule filter_module ${MEOW_MODULES}/mod_filter.so
-LoadModule reqtimeout_module ${MEOW_MODULES}/mod_reqtimeout.so
-LoadModule autoindex_module ${MEOW_MODULES}/mod_autoindex.so
-LoadModule mime_module ${MEOW_MODULES}/mod_mime.so
-LoadModule log_config_module ${MEOW_MODULES}/mod_log_config.so
-LoadModule alias_module ${MEOW_MODULES}/mod_alias.so
-LoadModule dir_module ${MEOW_MODULES}/mod_dir.so
-LoadModule rewrite_module ${MEOW_MODULES}/mod_rewrite.so
-LoadModule env_module ${MEOW_MODULES}/mod_env.so
-LoadModule headers_module ${MEOW_MODULES}/mod_headers.so
-LoadModule setenvif_module ${MEOW_MODULES}/mod_setenvif.so
-LoadModule version_module ${MEOW_MODULES}/mod_version.so
+LoadModule access_compat_module @MODULES_DIR@/mod_access_compat.so
+LoadModule auth_basic_module @MODULES_DIR@/mod_auth_basic.so
+LoadModule authn_core_module @MODULES_DIR@/mod_authn_core.so
+LoadModule authn_file_module @MODULES_DIR@/mod_authn_file.so
+LoadModule authz_core_module @MODULES_DIR@/mod_authz_core.so
+LoadModule authz_groupfile_module @MODULES_DIR@/mod_authz_groupfile.so
+LoadModule authz_host_module @MODULES_DIR@/mod_authz_host.so
+LoadModule authz_user_module @MODULES_DIR@/mod_authz_user.so
+LoadModule filter_module @MODULES_DIR@/mod_filter.so
+LoadModule reqtimeout_module @MODULES_DIR@/mod_reqtimeout.so
+LoadModule autoindex_module @MODULES_DIR@/mod_autoindex.so
+LoadModule mime_module @MODULES_DIR@/mod_mime.so
+LoadModule log_config_module @MODULES_DIR@/mod_log_config.so
+LoadModule alias_module @MODULES_DIR@/mod_alias.so
+LoadModule dir_module @MODULES_DIR@/mod_dir.so
+LoadModule rewrite_module @MODULES_DIR@/mod_rewrite.so
+LoadModule env_module @MODULES_DIR@/mod_env.so
+LoadModule headers_module @MODULES_DIR@/mod_headers.so
+LoadModule setenvif_module @MODULES_DIR@/mod_setenvif.so
+LoadModule version_module @MODULES_DIR@/mod_version.so
 @SSL_MODULES@
 @PROXY_MODULES@
 
