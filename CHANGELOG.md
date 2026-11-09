@@ -29,6 +29,9 @@
 - **Linux 的端口默认 8080/8443**：新装实例不跟 Windows 抢 80/443。
 - **`.desktop` 启动器 + XDG 开机自启**：`shortcut` 在 Linux 上生成
   `meowbox-panel.desktop`，`autostart on` 写 `~/.config/autostart/`（不碰 systemd）。
+- **`MEOWBOX_ROOT` 环境变量**：跨系统开发时源码放共享盘、数据各在各的分区，
+  每次敲 `--root ~/meowbox` 太烦。设一次环境变量就够了（两个平台都认），
+  不设还是老行为（程序所在目录）。
 
 ### 改法（为什么非得这么改）
 
