@@ -57,9 +57,12 @@ Windows 的行为没变。
 ### 装组件
 
 ```bash
-sudo pacman -S --needed apache php php-cgi mariadb nginx nss libcap
-# Debian/Ubuntu：sudo apt install apache2 php php-cgi mariadb-server nginx libnss3-tools libcap2-bin
+sudo pacman -S --needed apache php php-cgi mariadb nginx nss libcap tk
+# Debian/Ubuntu：sudo apt install apache2 php php-cgi mariadb-server nginx libnss3-tools libcap2-bin python3-tk
 ```
+
+> **`tk` 是给控制面板的**：Arch 的 `python` 包不自带 Tk 图形库，少了它会报
+> `libtk8.6.so: cannot open shared object file`。服务本身不需要它，命令行全都能用。
 
 **为什么不自己下二进制**：`bin/` 里那套是 Windows 版（`.exe`），而且 Linux 上的
 `.so` 得跟系统的 glibc / 依赖库对上；发行版的包还给安全更新。喵盒的活是

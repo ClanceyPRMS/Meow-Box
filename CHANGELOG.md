@@ -78,6 +78,10 @@
   正确判据是**比对「datadir 属于哪套」和「当前 exe 是哪套」**：
   `mysql.ibd` → MySQL 8；`aria_log_control` / `global_priv.MAD` → MariaDB。
   配套就放行，不配套才拒绝。
+- **Arch 上 `python meowbox.py gui` 直接甩 traceback**：发行版的 `python`
+  不自带 Tk 库（`libtk8.6.so: cannot open shared object file`），要单独
+  `pacman -S tk`。现在 `cmd_gui` 先探 tkinter，缺了就打印「装哪个包」，
+  不再甩一串 traceback。README 的依赖清单也补上了 `tk`。
 
 ### 跨系统开发的护栏（源码在 NTFS 上）
 

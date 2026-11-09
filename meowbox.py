@@ -406,6 +406,21 @@ def cmd_tray(args) -> int:
 def cmd_gui(args) -> int:
     """打开控制面板。**没有配置也能开**：会先按默认值初始化，别逼用户回命令行。"""
     plat.ensure_display()
+    # 先单独探一下 tkinter：Linux 上的发行版 python 常常没带 Tk 库，
+    # 直接 import meow.gui 会甩一串 ImportError traceback，看不出该装什么。
+    try:
+        import tkinter  # noqa: F401
+    except ImportError as exc:
+        print("图形面板需要 tkinter，这个 Python 里没有：")
+        print(f"  {exc}\n")
+        if plat.IS_WINDOWS:
+            print("  重装 Python 时勾上「tcl/tk and IDLE」就行。")
+        else:
+            print("  装一下 Tk 库：")
+            print("    Arch:          sudo pacman -S tk")
+            print("    Debian/Ubuntu: sudo apt install python3-tk")
+            print("\n  装完再跑一次就行（服务本身不需要它，命令行全都能用）。")
+        return 1
     from meow import gui
     root = Path(args.root).resolve()
     _ensure_config(args, root)
