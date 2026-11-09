@@ -85,8 +85,12 @@ def default_root() -> str:
     优先级：环境变量 `MEOWBOX_ROOT` → 程序所在目录。
     跨系统开发时源码放在共享盘、数据各在各的分区，光靠 `--root` 每次都要敲，
     所以留一个环境变量给它（Windows 和 Linux 都认）。
+
+    值里的 `~` 会展开 —— 不然 `MEOWBOX_ROOT='~/meowbox'`（带引号时 shell
+    不展开）会让 `Path("~/meowbox")` 变成一个叫 `~` 的目录。
     """
-    return os.environ.get("MEOWBOX_ROOT") or str(ROOT)
+    raw = os.environ.get("MEOWBOX_ROOT") or str(ROOT)
+    return str(Path(raw).expanduser())
 
 
 def _row(name: str, value: str) -> None:
