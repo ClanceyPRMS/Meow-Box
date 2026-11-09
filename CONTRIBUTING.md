@@ -25,7 +25,7 @@ python meowbox.py init --provider "D:/laragon"
 python meowbox.py init --provider ""
 ```
 
-Linux（Arch 已验证）还需要系统包和 Tk 库，见 README 的「Linux」一节。
+Linux（Arch 已验证）还需要系统包和 Tk 库，见 [docs/linux.md](docs/linux.md)。
 喵盒**本体零第三方依赖** —— 这是它的卖点，别往 `dependencies` 里加东西。
 
 ## 跑测试（改完必跑）

@@ -18,6 +18,12 @@
 - `SECURITY.md`（漏洞报告渠道 + 「哪些是设计决定而非漏洞」）、`CONTRIBUTING.md`
   （平台改动的硬规矩 + 提 PR 前自查清单）。
 - Release 附 SHA256：v0.3.0 起，zip 旁边多一个 `.sha256`，说明里也写了校验方法。
+- **README 瘦身**：57KB / 1032 行的长文拆进 `docs/`（`linux.md` / `features.md` /
+  `reference.md` / `cross-platform.md` / `design-notes.md`），README 只留
+  简介、截图、快速开始和一张索引表。**一个字都没删**，只是不该挤在首页。
+- **`packages.conf` 支持 `sha256=`**：写了就在解压前强制校验（缓存命中也校验），
+  对不上就删文件报错；没写就打印实际哈希让你填。`pkg list` 里带 🔒 的是已锁住的。
+  —— 上游镜像被换、DNS 被劫持、缓存里躺半截文件，只有哈希能发现。
 
 ### 修复
 
