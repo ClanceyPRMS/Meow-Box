@@ -9,8 +9,14 @@ authors = [{ name = "玛莉嘉 & 于光远" }]
 keywords = ["windows", "local-development", "apache", "nginx", "mysql", "php", "portable"]
 classifiers = [
     "License :: OSI Approved :: MIT License",
+    "Environment :: Win32 (MS Windows)",
     "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Internet :: WWW/HTTP :: HTTP Servers",
     "Topic :: Software Development :: Build Tools",
 ]
 

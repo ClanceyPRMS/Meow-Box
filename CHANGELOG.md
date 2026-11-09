@@ -19,11 +19,20 @@
   （平台改动的硬规矩 + 提 PR 前自查清单）。
 - Release 附 SHA256：v0.3.0 起，zip 旁边多一个 `.sha256`，说明里也写了校验方法。
 
+### 修复
+
+- **Linux / 多用户机器上根私钥是 0644**：`openssl … -keyout` 是按 umask 建文件的，
+  隔壁用户能直接读走 `meowbox-ca.key`，然后给任意 `*.meow` 域名签一张浏览器
+  信任的假证书。现在根私钥和站点私钥生成后立刻 `chmod 600`（Windows 跳过，
+  那边权限归 ACL）。本机已有的 `etc/ssl/*.key` 也手工收紧过了。
+
 ### 变更
 
 - `requires-python >=3.10` 现在有证据了：3.10.22 上 `compileall` 和全套单测都通过，
   24 个模块只有 `tray`（Windows 专属）不能 import。钉 3.14 是为了**打包**
   （精简解释器缺 `ctypes.wintypes.HCURSOR`）。README 里写清楚了。
+- `pyproject` 的 classifiers 补上 Linux 和 Python 3.10 / 3.12 / 3.14 ——
+  0.3.0 就支持了，元数据一直没跟上（虽然不发 PyPI，标签也该说实话）。
 
 ### 计划中
 
