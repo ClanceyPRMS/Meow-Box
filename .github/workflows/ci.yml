@@ -31,9 +31,9 @@ jobs:
             python: "3.14"
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
 
@@ -44,7 +44,7 @@ jobs:
         run: python -m pip install --disable-pip-version-check pytest
 
       - name: 单元测试
-        run: python -m pytest -q
+        run: python -m pytest
 
       - name: 占位符残留（渲染用的是 @名字@，漏传就会留在配置里）
         run: python -c "import sys; from meow import vhost; t=vhost.render_apache('www','demo','meow',80,'logs','templates'); print('OK' if '@' not in t else 'RESIDUAL PLACEHOLDER'); sys.exit(0 if '@' not in t else 1)"
