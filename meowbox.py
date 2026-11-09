@@ -33,6 +33,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import platform
 import re
 import shutil
@@ -76,6 +77,16 @@ phpinfo();
 def _title(text: str) -> None:
     print(f"\n🐾 {text}")
     print("─" * 46)
+
+
+def default_root() -> str:
+    """默认的数据目录。
+
+    优先级：环境变量 `MEOWBOX_ROOT` → 程序所在目录。
+    跨系统开发时源码放在共享盘、数据各在各的分区，光靠 `--root` 每次都要敲，
+    所以留一个环境变量给它（Windows 和 Linux 都认）。
+    """
+    return os.environ.get("MEOWBOX_ROOT") or str(ROOT)
 
 
 def _row(name: str, value: str) -> None:
@@ -1438,8 +1449,9 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=runtime.localize(__doc__ or ""),
     )
-    parser.add_argument("--root", default=str(ROOT),
-                        help="喵盒根目录（默认：程序所在目录）")
+    parser.add_argument("--root", default=default_root(),
+                        help="喵盒根目录/数据目录（默认：环境变量 MEOWBOX_ROOT，"
+                             "否则程序所在目录）")
     sub = parser.add_subparsers(dest="cmd")
 
     p = sub.add_parser("init", help="初始化喵盒")
