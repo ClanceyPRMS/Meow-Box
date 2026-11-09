@@ -22,7 +22,14 @@ dependencies = []
 # 只有「打包成 exe」这一步才需要 PyInstaller。
 # 版本锁在 uv.lock 里：大版本一变，onedir 结构 / hook 行为就可能跟着变，
 # 打出来的包跟上次不一样 —— 这种漂移最难查。
-dev = ["pyinstaller>=6.22.3,<7"]
+dev = ["pyinstaller>=6.22.3,<7", "pytest>=8"]
+
+[tool.pytest.ini_options]
+# 测试只碰「纯逻辑」（模板渲染 / hosts 拼接 / 配置相对化 / 清单解析），
+# 不启任何服务，两个平台都能跑。根目录加到 sys.path 才能 import meow。
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
 
 [tool.uv]
 # 喵盒是「应用程序」不是「要 pip install 的库」：
