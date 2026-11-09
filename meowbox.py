@@ -484,7 +484,11 @@ def cmd_portable(args) -> int:
     print()
     if info["portable"]:
         print("  ✅ 结论：整个文件夹可以随便搬 —— 复制到别的盘/别的机器，")
-        print("     直接 " + runtime.localize("python meowbox.py start") + " 就能继续用。")
+        if plat.IS_WINDOWS:
+            print("     直接 " + runtime.localize("python meowbox.py start") + " 就能继续用。")
+        else:
+            print("     装好系统包（apache/php/mariadb/nginx）之后 " 
+                  + runtime.localize("python meowbox.py start") + " 就能继续用。")
     else:
         print("  ⚠️  结论：还有写死的路径，搬走会出问题。")
         print("     修一下： " + runtime.localize("python meowbox.py portable --fix"))

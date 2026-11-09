@@ -54,7 +54,7 @@ def report(cfg: dict, bins: dict | None = None) -> dict:
             checks.append((OK, "组件来源", "喵盒自己的 bin/（完全自带）"))
         else:
             checks.append((OK, "组件来源",
-                           "系统包优先（/usr/bin），找不到才用自己 bin/ —— 自动探测"))
+                           "系统包优先（/usr、/usr/sbin），找不到才用自己 bin/ —— 自动探测"))
     else:
         p = cfgmod.resolve(root, provider)
         inside = str(p).lower().startswith(str(root).lower())
