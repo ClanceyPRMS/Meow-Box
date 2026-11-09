@@ -31,6 +31,44 @@ def test_load_menu_parses_names_and_urls(tmp_path):
     ]
 
 
+PINNED = """# 名字=地址 [sha256=<64位十六进制>]
+nginx=https://example.com/nginx.zip sha256=AA11bb22CC33dd44EE55ff66AA77bb88CC99dd00EE11ff22AA33bb44CC55dd66
+php=https://example.com/php.zip
+"""
+
+
+def test_load_entries_reads_and_normalizes_the_hash(tmp_path):
+    (tmp_path / "packages.conf").write_text(PINNED, encoding="utf-8")
+    entries = packages.load_entries({"root": str(tmp_path)})
+    assert entries == [
+        ("nginx", "https://example.com/nginx.zip",
+         "aa11bb22cc33dd44ee55ff66aa77bb88cc99dd00ee11ff22aa33bb44cc55dd66"),
+        ("php", "https://example.com/php.zip", None),
+    ]
+
+
+def test_load_entries_survives_malformed_hash(tmp_path):
+    """`sha256=` 后面空着不能把整行吃掉，也不能让地址带上它。"""
+    (tmp_path / "packages.conf").write_text(
+        "a=https://example.com/a.zip sha256=\n"
+        "b=https://example.com/b.zip  sha256=deadbeef  # 多空格\n",
+        encoding="utf-8",
+    )
+    entries = packages.load_entries({"root": str(tmp_path)})
+    assert entries[0] == ("a", "https://example.com/a.zip", None)
+    assert entries[1][0] == "b" and entries[1][1] == "https://example.com/b.zip"
+    assert entries[1][2] == "deadbeef"
+
+
+def test_load_menu_still_returns_pairs(tmp_path):
+    """面板还在用旧的两元组接口，别把它改坏了。"""
+    (tmp_path / "packages.conf").write_text(PINNED, encoding="utf-8")
+    assert packages.load_menu({"root": str(tmp_path)}) == [
+        ("nginx", "https://example.com/nginx.zip"),
+        ("php", "https://example.com/php.zip"),
+    ]
+
+
 def test_ensure_menu_writes_a_default_the_first_time(tmp_path):
     path = packages.ensure_menu({"root": str(tmp_path)})
     assert path.is_file()

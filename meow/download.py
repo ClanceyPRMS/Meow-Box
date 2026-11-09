@@ -10,6 +10,7 @@ SSL 出错时再退回系统 curl（有时候 Python 的证书链不如系统的
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import tarfile
@@ -22,6 +23,32 @@ from .util import ensure_dir, fwd, run
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
       "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36")
+
+
+def sha256_of(path) -> str:
+    """算一个文件的 SHA256（十六进制小写）。"""
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def check_sha256(path, expected: str) -> str:
+    """比对哈希，不一致就抛错。返回实际哈希。
+
+    为什么非法不容：`packages.conf` 里的下载是「拿到就直接解压进 bin/」，
+    中间没有任何人看过内容。上游镜像被污染、DNS 被劫持、缓存里躺着上次下坏的
+    半截文件 —— 这三种都只能靠哈希发现。
+    """
+    actual = sha256_of(path)
+    if actual.lower() != str(expected).strip().lower():
+        raise ValueError(
+            f"{Path(path).name} 的 SHA256 对不上：\n"
+            f"  期望 {str(expected).strip().lower()}\n"
+            f"  实际 {actual}"
+        )
+    return actual
 
 
 def fetch_text(url: str, timeout: int = 60) -> str:
@@ -37,13 +64,37 @@ def fetch_text(url: str, timeout: int = 60) -> str:
     return raw.decode("utf-8", "replace")
 
 
-def fetch(url: str, dest, say=print, timeout: int = 900) -> Path:
-    """下载到 dest。已存在且非空就跳过（缓存）。"""
+def _finish(dest: Path, say, expected_sha256: str | None) -> Path:
+    """下载完（或命中缓存）之后的收尾：校验，或者把哈希打出来让人去锁。"""
+    if expected_sha256:
+        try:
+            digest = check_sha256(dest, expected_sha256)
+        except ValueError as exc:
+            # 坏文件必须删掉：否则下次「缓存命中」会一直拿它去解压
+            dest.unlink(missing_ok=True)
+            raise ValueError(
+                f"{exc}\n\n这个文件已经删了，别拿它解压。请确认 URL 和哈希哪个过期了。"
+            ) from None
+        say(f"  SHA256 校验通过（{digest[:16]}…）")
+    else:
+        say(f"  SHA256 {sha256_of(dest)}")
+        say("    ↑ 想锁死这个包：把这一串作为 sha256= 写进 packages.conf，下次装就会强制校验")
+    return dest
+
+
+def fetch(url: str, dest, say=print, timeout: int = 900,
+          expected_sha256: str | None = None) -> Path:
+    """下载到 dest。已存在且非空就跳过（缓存）。
+
+    `expected_sha256` 给了就**强制校验**（缓存命中也校验 —— 缓存里可能是上次
+    下坏的半截文件，或者旧版本）；对不上就删文件、抛错，绝不往下解压。
+    没给就打印实际哈希，方便把它填进 `packages.conf`。
+    """
     dest = Path(dest)
     ensure_dir(dest.parent)
     if dest.is_file() and dest.stat().st_size > 0:
         say(f"  缓存里已经有 {dest.name}（{dest.stat().st_size // 1024 // 1024} MB），跳过下载")
-        return dest
+        return _finish(dest, say, expected_sha256)
 
     say(f"  下载 {url}")
     try:
@@ -69,7 +120,7 @@ def fetch(url: str, dest, say=print, timeout: int = 900) -> Path:
             raise RuntimeError(f"下载失败：{(err or out).strip()}") from exc
     size = dest.stat().st_size
     say(f"  完成：{dest.name}（{size // 1024 // 1024} MB）")
-    return dest
+    return _finish(dest, say, expected_sha256)
 
 
 def extract(archive, dest, say=print) -> Path:
@@ -127,4 +178,5 @@ def _noop() -> None:
 if os.name != "nt":                       # pragma: no cover - 只为可读性
     _noop()
 
-__all__ = ["fetch", "fetch_text", "extract", "move_tree", "rmtree", "human"]
+__all__ = ["fetch", "fetch_text", "extract", "move_tree", "rmtree", "human",
+           "sha256_of", "check_sha256"]

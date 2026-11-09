@@ -1280,9 +1280,11 @@ def cmd_pkg(args) -> int:
     cfg, _ = _load(Path(args.root))
     if args.action == "list":
         _title("软件清单（packages.conf）")
-        for name, url in pkgmod.load_menu(cfg):
-            print(f"  {name:<20} {url}")
-        print("\n  安装： python meowbox.py pkg install <名字>")
+        for name, url, digest in pkgmod.load_entries(cfg):
+            mark = "🔒" if digest else "  "
+            print(f"  {mark} {name:<20} {url}")
+        print("\n  🔒 = 已写 sha256，安装时强制校验（没标的下载完会打印哈希，填上就锁住）")
+        print("  安装： python meowbox.py pkg install <名字>")
         return 0
     if args.action == "install":
         if not args.name:
