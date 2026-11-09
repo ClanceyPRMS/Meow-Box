@@ -90,6 +90,25 @@ def find_openssl(cfg: dict, bins: dict):
     return None
 
 
+def _lock_down(path) -> None:
+    """私钥只给属主读写（POSIX）。
+
+    为什么必须显式做：`openssl ... -keyout` 是按 umask 建文件的，umask 022 时
+    拿到的是 **0644** —— 同一台机器上的任何用户都能读走根私钥，然后就能给
+    任意 `*.meow` 域名签出一张浏览器信任的假证书。Windows 上权限由 ACL 管，
+    不是 chmod 能设的，直接跳过。
+
+    设不上（FAT/exFAT 之类没有权限位的文件系统）就当作没做：最坏回到原来的
+    行为，不值得为此让签发证书失败。
+    """
+    if plat.IS_WINDOWS:
+        return
+    try:
+        Path(path).chmod(0o600)
+    except OSError:
+        pass
+
+
 class CertAuthority:
     """本地 CA + 站点证书。"""
 
@@ -175,6 +194,7 @@ class CertAuthority:
         ])
         if rc != 0:
             self._fail("生成根证书", out, err)
+        _lock_down(self.ca_key)
         return True
 
     def make_cert(self, host: str, days: int = CERT_DAYS) -> tuple[Path, Path]:
@@ -211,6 +231,7 @@ class CertAuthority:
         if rc != 0:
             self._fail(f"用根证书签发 {host}", out, err)
         csr.unlink(missing_ok=True)
+        _lock_down(key)
         return crt, key
 
     def verify(self, host: str) -> tuple[bool, str]:
