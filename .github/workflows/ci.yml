@@ -1,0 +1,50 @@
+name: CI
+
+# 每次 push / PR 都跑：语法检查 + 单元测试。
+# 测试只碰纯逻辑（模板渲染 / hosts / 配置 / 清单 / 版本号），不起任何服务，
+# 所以 Linux 和 Windows 跑的是同一批用例 —— 两边都绿才算数。
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.os }} · Python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # pyproject 声明的是 >=3.10，那就真在 3.10 上验一次（别只写在元数据里）
+          - os: ubuntu-latest
+            python: "3.10"
+          - os: ubuntu-latest
+            python: "3.14"
+          # 托盘 / 面板 / hosts 提权都是 Windows 分支，必须在真 Windows 上跑一遍
+          - os: windows-latest
+            python: "3.14"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: 语法检查（不 import，所以跨平台安全）
+        run: python -m compileall -q meow meowbox.py build_exe.py tests
+
+      - name: 装测试依赖（喵盒本体零第三方依赖，只有 pytest）
+        run: python -m pip install --disable-pip-version-check pytest
+
+      - name: 单元测试
+        run: python -m pytest -q
+
+      - name: 占位符残留（渲染用的是 @名字@，漏传就会留在配置里）
+        run: python -c "import sys; from meow import vhost; t=vhost.render_apache('www','demo','meow',80,'logs','templates'); print('OK' if '@' not in t else 'RESIDUAL PLACEHOLDER'); sys.exit(0 if '@' not in t else 1)"

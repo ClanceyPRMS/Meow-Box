@@ -1,0 +1,43 @@
+name: 手动打包（Windows）
+
+# 只手动触发。用途：
+#   * 想验证「干净 clone + 固定版本依赖」能不能打出和 Release 一致的包；
+#   * 人在 Linux 时，先在这里打一个 zip 下来比对。
+# **不会**自动发布 Release —— 发版仍然走 README 里那份手工清单（版本号四处一致、
+# CHANGELOG、干净副本冒烟），把人名和说明交给流程自动生成反而容易出事。
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      # 版本必须跟 uv.lock 里锁的一致：PyInstaller 大版本一变，
+      # onedir 结构和 hook 行为就可能跟着变，打出来的包跟上次不一样。
+      - name: 装 PyInstaller（版本对齐 uv.lock）
+        run: python -m pip install --disable-pip-version-check "pyinstaller>=6.22.3,<7"
+
+      - name: 打包三个 exe
+        run: python build_exe.py
+
+      - name: 自检（托盘能不能真的挂到通知区）
+        run: |
+          if (Test-Path dist\MeowBox\meowbox-tray.exe) { dist\MeowBox\meowbox-tray.exe --selftest } else { Write-Error "没找到 meowbox-tray.exe"; exit 1 }
+
+      - name: 压缩 + 打印校验和
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist\MeowBox\* -DestinationPath MeowBox-ci-win64.zip
+          (Get-FileHash MeowBox-ci-win64.zip -Algorithm SHA256).Hash
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MeowBox-ci-win64
+          path: MeowBox-ci-win64.zip
+          retention-days: 14
