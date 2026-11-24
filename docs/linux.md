@@ -45,6 +45,15 @@ python meowbox.py tld meow    # 然后把 web.http_port 改回 80、https_port �
 
 `pacman -Syu` 换掉二进制之后这个能力会丢（xattr 跟着文件走），升级完再跑一次。
 
+**站点地址一律带端口**：`https://<站>.meow:8443`、`http://<站>.meow:8080`。
+80 / 443 是 http / https 的**默认端口**，所以 Windows 上可以省略；8080 / 8443
+是备用端口，浏览器不会替你猜 —— 少了端口它就去连 443，那里没人监听。
+
+也别把 `http://站:8080` 写成 `https://站:8080`（或者让浏览器的「HTTPS 优先」
+替你升级）：拿 TLS 去敲明文端口，报的是 `SSL_ERROR_RX_RECORD_TOO_LONG`，
+看着像证书坏了，其实是敲错门。`meowbox.py list` 和面板现在都会把端口带上，
+照着点就不会错。
+
 ### hosts
 
 Linux 的 `/etc/hosts` 是 root 的。`hosts --apply` 会调 `pkexec` 弹认证框；
@@ -59,6 +68,25 @@ sudo cp /tmp/meowbox-hosts.new /etc/hosts
 Windows 装进「当前用户的证书库」；Linux 上是 **NSS**：
 `~/.pki/nssdb`（Chromium/Chrome）+ 每个 Firefox profile 的 `cert9.db`，
 另外往 p11-kit 的用户级 anchors 放一份给 curl / GTK。都不需要 root。
+
+**Firefox 的 profile 不一定在 `~/.mozilla`**：设了 XDG 配置目录、用 snap / flatpak、
+或 LibreWolf / Zen 分支时，它会在 `~/.config/mozilla/firefox` 这类地方（本机实测就是）。
+喵盒会扫 `~/.mozilla`、`~/.config/mozilla`、snap、flatpak、`~/.librewolf`、`~/.zen`
+六个位置；只认 `~/.mozilla` 的话，会出现「喵盒说信任已装、浏览器照样报证书错误」。
+
+### 代理绕过
+
+装了 Clash / FlClash 之类的代理时，浏览器会把 `站.meow` 也交给代理，代理去远端
+解析这个域名当然失败 —— 现象是 `ERR_TUNNEL_CONNECTION_FAILED`、
+`PR_END_OF_FILE_ERROR`，**看起来像站点挂了**。
+
+`hosts --apply` 会顺带把它写进 GNOME 的系统代理忽略列表
+（`org.gnome.system.proxy ignore-hosts`；Firefox / Chromium 在 GLib 桌面上读的就是它），
+一次写 `*.meow` + 每个站点的完整域名 + `*.loc` / `*.test`。
+改完**重启浏览器**才生效，代理列表只在启动时读一次。
+
+没有 gsettings 的桌面（纯 KDE 之类）喵盒会明说「跳过」而不是假装成功，
+这时手动在代理软件里加一条 `*.meow` 就够了。
 
 ### 没有的东西
 

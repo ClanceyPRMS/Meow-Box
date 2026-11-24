@@ -38,7 +38,7 @@ LINUX_EXT_DIRS = (
 #: `/usr/lib/php/modules/*.so` 实际存在的那些。都是 WordPress / Discuz 常用。
 #: 这里只列「确定安全」的：imap / ldap / pgsql 这些依赖外部库，不碰。
 WANT_EXTENSIONS = (
-    "bz2", "curl", "fileinfo", "gd", "gettext", "gmp", "intl", "mbstring",
+    "bz2", "curl", "fileinfo", "gd", "gettext", "gmp", "iconv", "intl", "mbstring",
     "exif", "mysqli", "openssl", "pdo_mysql", "pdo_sqlite", "sodium",
     "sockets", "sqlite3", "soap", "tidy", "xsl", "zip",
 )

@@ -262,8 +262,18 @@ class CertAuthority:
 # ------------------------------------------------------------------ 信任库
 #: Chromium / Chrome 在 Linux 上用 NSS 数据库
 NSS_DB = Path.home() / ".pki" / "nssdb"
-#: Firefox 每个 profile 一个 cert9.db
-FIREFOX_ROOT = Path.home() / ".mozilla" / "firefox"
+#: Firefox 每个 profile 一个 cert9.db。**不能只认 `~/.mozilla`**：设了 XDG 配置目录、
+#: 用 snap / flatpak 安装、或者用 LibreWolf / Zen 的分支时，profile 会跑到别处
+#: （本机实测：profile 在 `~/.config/mozilla/firefox/`，只认 `~/.mozilla` 就会
+#: 「报告已装信任、浏览器照样报证书错误」）。
+FIREFOX_ROOTS = (
+    Path.home() / ".mozilla" / "firefox",
+    Path.home() / ".config" / "mozilla" / "firefox",
+    Path.home() / "snap" / "firefox" / "common" / ".mozilla" / "firefox",
+    Path.home() / ".var" / "app" / "org.mozilla.firefox" / ".mozilla" / "firefox",
+    Path.home() / ".librewolf",
+    Path.home() / ".zen",
+)
 
 
 def _certutil() -> str | None:
@@ -273,13 +283,15 @@ def _certutil() -> str | None:
 
 
 def _nss_dbs() -> list[Path]:
-    """所有该装根证书的 NSS 库：Chromium 的 + 每个 Firefox profile。"""
+    """所有该装根证书的 NSS 库：Chromium 的 + 每个 Firefox（及其分支）profile。"""
     out: list[Path] = []
     if NSS_DB.is_dir():
         out.append(NSS_DB)
-    if FIREFOX_ROOT.is_dir():
-        for profile in sorted(FIREFOX_ROOT.iterdir()):
-            if (profile / "cert9.db").is_file():
+    for root in FIREFOX_ROOTS:
+        if not root.is_dir():
+            continue
+        for profile in sorted(root.iterdir()):
+            if (profile / "cert9.db").is_file() and profile not in out:
                 out.append(profile)
     return out
 

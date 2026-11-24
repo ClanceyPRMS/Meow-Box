@@ -67,14 +67,23 @@ def site_url(cfg: dict, lay: dict, name: str) -> str:
 
     面板里双击、命令行 `list`、托盘菜单都用这一个判断 —— 免得三处各写一套，
     最后出现「面板显示 http、浏览器却已经有小绿锁」这种不一致。
+
+    **端口不是该协议的默认端口时必须带上**：Linux 上喵盒用 8080 / 8443
+    （<1024 要特权，所以默认不碰 80/443）。少了端口，给出的地址在浏览器里
+    根本打不开 —— 443/80 上没人监听；更坑的是浏览器还会把 `http://站:8080`
+    自动升级成 https 撞到明文端口，报 SSL_ERROR_RX_RECORD_TOO_LONG。
+    Windows 是 80/443，照旧省略端口。
     """
     host = hostname_for(name, cfg["sites"]["tld"])
-    if cfg.get("web", {}).get("ssl"):
+    web = cfg.get("web") or {}
+    if web.get("ssl"):
         crt = Path(lay["ssl_sites"]) / f"{host}.crt"
         key = Path(lay["ssl_sites"]) / f"{host}.key"
         if crt.is_file() and key.is_file():
-            return f"https://{host}"
-    return f"http://{host}"
+            port = int(web.get("https_port") or 443)
+            return f"https://{host}" + ("" if port == 443 else f":{port}")
+    port = int(web.get("http_port") or 80)
+    return f"http://{host}" + ("" if port == 80 else f":{port}")
 
 
 def fcgi_target(port: int) -> str:

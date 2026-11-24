@@ -13,8 +13,10 @@
 """
 from __future__ import annotations
 
+import ast
 import os
 import shutil
+import subprocess
 import tempfile
 import time
 from pathlib import Path
@@ -218,16 +220,61 @@ def wait_until(hostnames, path=None, timeout: float = 60.0, interval: float = 1.
 
 
 # --------------------------------------------------------------------------- 代理绕过
-#: 写 HKCU 不需要管理员，所以这一步跟 hosts 分开做
+#: Windows：写 HKCU 不需要管理员，所以这一步跟 hosts 分开做
 _PROXY_KEY = r"Software\Microsoft\Windows\CurrentVersion\Internet Settings"
+#: Linux：GNOME / GLib 的系统代理。Firefox、Chromium 在 GLib 桌面上读的就是它，
+#: Arch 上对应的是 gsettings（glib2 自带）。纯 KDE 之类没有对应物时只能跳过并说明。
+_GS_SCHEMA = "org.gnome.system.proxy"
+_GS_KEY = "ignore-hosts"
 #: 不管用户配了什么后缀，这些本地开发常用的都该绕过代理
 ALWAYS_BYPASS = ("localhost", "127.*", "<local>")
 
 
+def _gsettings_entries() -> list[str] | None:
+    """GNOME 系统代理的忽略列表；读不到（没装 gsettings / 没有这个 key）返回 None。"""
+    exe = shutil.which("gsettings")
+    if not exe:
+        return None
+    try:
+        proc = subprocess.run([exe, "get", _GS_SCHEMA, _GS_KEY],
+                              capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    text = proc.stdout.strip()
+    if not text.startswith("["):
+        return None
+    try:
+        return [str(item) for item in ast.literal_eval(text)]
+    except (ValueError, SyntaxError):
+        return None
+
+
+def _write_gsettings_entries(entries: list[str]) -> tuple[bool, str]:
+    """把忽略列表写回 GNOME 系统代理，返回 (成功?, 错误说明)。"""
+    exe = shutil.which("gsettings")
+    if not exe:
+        return False, "系统里没有 gsettings（GNOME / GLib 那一套才有）"
+    payload = "[" + ", ".join("'" + item.replace("'", "") + "'" for item in entries) + "]"
+    try:
+        proc = subprocess.run([exe, "set", _GS_SCHEMA, _GS_KEY, payload],
+                              capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, str(exc)
+    if proc.returncode != 0:
+        return False, (proc.stderr or proc.stdout).strip() or "gsettings set 没成功"
+    return True, ""
+
+
 def proxy_bypass_entries() -> list[str]:
-    """当前用户的代理绕过列表（分号分隔的那些）。"""
-    if os.name != "nt":
-        return []
+    """当前用户的代理绕过列表。
+
+    Windows 是 HKCU 的 `ProxyOverride`（分号分隔），Linux 是 GNOME 的
+    `org.gnome.system.proxy ignore-hosts`（Firefox / Chromium 读它）。
+    """
+    if not plat.IS_WINDOWS:
+        return _gsettings_entries() or []
     import winreg
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _PROXY_KEY) as key:
@@ -242,18 +289,26 @@ def ensure_proxy_bypass(tld: str = "meow", hostnames=(), extra=("loc", "test")) 
 
     为什么必须做：装了 Clash / Watt Toolkit 之类的代理工具时，浏览器会把
     `mq.meow` 也丢给代理，代理去远端解析这个域名当然失败，于是报
-    **ERR_TUNNEL_CONNECTION_FAILED** —— 看起来像站点挂了，其实是请求没到本机 Apache。
+    **ERR_TUNNEL_CONNECTION_FAILED / PR_END_OF_FILE_ERROR** —— 看起来像站点挂了，
+    其实是请求根本没到本机 Apache。
 
     加两类东西，都不写死：
     * `*.<当前后缀>` —— 后缀来自 `sites.tld`，用户改成 `.lh`、`.dev`、`.abc` 都跟着变；
     * **每个站点的完整域名** —— 万一后缀是空的（域名就是站点名），或者用户在
       浏览器里用了别的写法，逐条列出来最保险。
 
-    只动当前用户（HKCU），不需要管理员。
+    Windows 只动当前用户（HKCU），Linux 动的是当前用户的 GNOME 设置，都不需要管理员。
+    **改完已经开着的浏览器要重启一次**，它才读新列表。
     """
-    if os.name != "nt":
-        return {"changed": False, "skipped": "只有 Windows 需要"}
-    import winreg
+    if plat.IS_WINDOWS:
+        current = proxy_bypass_entries()
+    else:
+        entries = _gsettings_entries()
+        if entries is None:
+            return {"changed": False,
+                    "skipped": "这个桌面没有 gsettings，改不了系统代理"
+                               "（把 *.meow 手动加进代理软件的绕过列表）"}
+        current = entries
 
     wanted: list[str] = []
     if tld:
@@ -263,13 +318,20 @@ def ensure_proxy_bypass(tld: str = "meow", hostnames=(), extra=("loc", "test")) 
     # 去重但保序
     wanted = list(dict.fromkeys(wanted))
 
-    current = proxy_bypass_entries()
     have = {p.strip().lower() for p in current}
     added = [w for w in wanted if w.lower() not in have]
     if not added:
         return {"changed": False, "entries": current}
 
     merged = current + added
+    if not plat.IS_WINDOWS:
+        ok, err = _write_gsettings_entries(merged)
+        if not ok:
+            return {"changed": False, "error": err, "entries": current}
+        return {"changed": True, "added": added, "entries": merged}
+
+    # 通知系统「代理设置变了」，不然已经开着的浏览器还按老列表走
+    import winreg
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _PROXY_KEY, 0,
                             winreg.KEY_READ | winreg.KEY_WRITE) as key:

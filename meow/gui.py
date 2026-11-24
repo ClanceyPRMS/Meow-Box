@@ -681,6 +681,10 @@ class Panel:
                 added = bypass["added"]
                 shown = "、".join(added[:3]) + (f" 等 {len(added)} 条" if len(added) > 3 else "")
                 extra = "；代理绕过已加 " + shown
+            elif bypass.get("skipped"):
+                extra = "；代理绕过跳过：" + bypass["skipped"]
+            elif bypass.get("error"):
+                extra = "；代理绕过没改成功：" + bypass["error"]
             if not result["applied"]:
                 return "主机条目已经是最新的" + extra
             return "已写入 " + ", ".join(names) + extra

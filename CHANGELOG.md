@@ -7,6 +7,12 @@
 
 ## [未发布]
 
+## [0.3.1] - 2026-11-24
+
+「在 Arch 上真跑了一个 MediaWiki」版。0.3.0 把喵盒搬到了 Linux，但有三处
+「只在 Windows 成立」的假设没跟着过去 —— 直到在 Arch 上真开了一个维基、
+真用浏览器去点，才一起露出来。Windows 侧的行为仍然一个字没改。
+
 ### 新增
 
 - **第一批单元测试**（`tests/`，pytest，46 个用例）：模板渲染、hosts 拼接、
@@ -27,6 +33,28 @@
 
 ### 修复
 
+- **Linux 上「代理绕过」一直没生效**：0.2.2 给 Windows 加过「把 `*.meow` 写进
+  代理绕过列表」，但 `hosts.ensure_proxy_bypass()` 在非 Windows 上直接
+  `return {"skipped": "只有 Windows 需要"}`，而 `hosts --apply` 还照常打印
+  「已经包含 `*.meow` 和 N 个站点域名」—— 等于告诉你没事、其实什么都没做。
+  开着 Clash 之类的浏览器报 `PR_END_OF_FILE_ERROR`，看着像站点挂了，其实是请求
+  被代理接走（`curl -x 127.0.0.1:7890 http://站.meow:8080` 会得到 502）。
+  现在 Linux 写 GNOME 的 `org.gnome.system.proxy ignore-hosts`（gsettings；
+  Firefox / Chromium 在 GLib 桌面上读的就是它），写完提示「浏览器要重启一次」；
+  没有 gsettings 的桌面会明说「跳过」，不再假装成功。面板和命令行两条路都改了。
+- **Firefox profile 不只在 `~/.mozilla`**：装根证书时只扫 `~/.mozilla/firefox`，
+  但设了 XDG 配置目录、用 snap / flatpak、或用 LibreWolf / Zen 时 profile 在别处
+  （本机实测在 `~/.config/mozilla/firefox`）—— 于是「喵盒说信任已装、浏览器照样
+  报证书错误」。现在扫 `~/.mozilla`、`~/.config/mozilla`、snap、flatpak、
+  `~/.librewolf`、`~/.zen` 六个位置。
+- **`list` / 面板给出的站点地址在 Linux 上点不开**：`vhost.site_url()` 只拼
+  `协议://域名`，不带端口。Windows 是 80 / 443（协议默认端口，能省），Linux 是
+  8080 / 8443（非默认），给出的 `https://站.meow` 在 443 上根本没人监听。
+  现在非默认端口一律带上（`https://站.meow:8443`），默认端口照旧省略。
+- **`iconv` 不在默认启用列表里**：Arch 的 `php` 包带了 `iconv.so` 却默认不启用，
+  MediaWiki 缺它直接 500（错误页只写「Please install or enable: iconv」）。
+  `WANT_EXTENSIONS` 补上；顺带说明：那份 `meowbox.ini` 是每次起 php-cgi 时
+  自动生成的，手改会在下一次重启时消失。
 - **Linux / 多用户机器上根私钥是 0644**：`openssl … -keyout` 是按 umask 建文件的，
   隔壁用户能直接读走 `meowbox-ca.key`，然后给任意 `*.meow` 域名签一张浏览器
   信任的假证书。现在根私钥和站点私钥生成后立刻 `chmod 600`（Windows 跳过，

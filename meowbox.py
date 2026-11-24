@@ -666,7 +666,9 @@ def cmd_hosts(args) -> int:
         if bypass.get("changed"):
             added = bypass["added"]
             shown = "、".join(added[:4]) + (f" 等 {len(added)} 条" if len(added) > 4 else "")
-            _row("代理绕过", "已加 " + shown)
+            _row("代理绕过", "已加 " + shown + "（浏览器要重启一次才生效）")
+        elif bypass.get("skipped"):
+            _row("代理绕过", "跳过：" + bypass["skipped"])
         elif bypass.get("error"):
             _row("代理绕过", "没改成功：" + bypass["error"])
         else:
